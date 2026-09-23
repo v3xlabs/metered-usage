@@ -16,6 +16,7 @@ const USD_COMPACT = new Intl.NumberFormat(undefined, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
+const LEVERAGE = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 const CENT = 0.01;
 const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 const SECONDS_PER_MINUTE = 60;
@@ -32,6 +33,8 @@ export const formatUsd = (value: number): string =>
 export const formatUsdCompact = (value: number): string => USD_COMPACT.format(value);
 
 export const formatCost = (value: number | undefined): string => (value === undefined ? "unpriced" : formatUsd(value));
+
+export const formatLeverage = (value: number | undefined): string => (value === undefined ? "-" : `${LEVERAGE.format(value)}x`);
 
 export const formatMoment = (timestamp: string): string => MOMENT.format(new Date(timestamp));
 

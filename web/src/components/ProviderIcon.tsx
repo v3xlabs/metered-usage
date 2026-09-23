@@ -106,6 +106,33 @@ export const providerLabel = (provider: string): string => {
   return provider === "" ? "Unknown provider" : `${provider.charAt(0).toUpperCase()}${provider.slice(1)}`;
 };
 
+// Taken from the fills of the logos above. The OpenAI and Grok marks carry no colour, so they
+// get a neutral grey that shows on both themes.
+const NEUTRAL_BRAND = "#8e8e93";
+const BRAND_COLORS: Readonly<Record<string, string>> = {
+  "antigravity": "#3789f9",
+  "anti-gravity": "#3789f9",
+  "claude": "#d97757",
+  "anthropic": "#d97757",
+  "codex": "#7a9dff",
+  "openai": NEUTRAL_BRAND,
+  "xai": NEUTRAL_BRAND,
+  "x-ai": NEUTRAL_BRAND,
+  "grok": NEUTRAL_BRAND,
+  "gemini": "#3186ff",
+  "gemini-cli": "#3186ff",
+  "aistudio": "#3186ff",
+  "kimi": "#1783ff",
+  "meta": "#0082fb",
+  "muse": "#0082fb",
+  "qwen": "#6f69f7",
+  "glm": "#3859ff",
+  "deepseek": "#4d6bfe",
+  "minimax": "#fe603c",
+};
+
+export const providerBrandColor = (provider: string): string => BRAND_COLORS[provider.toLowerCase()] ?? NEUTRAL_BRAND;
+
 const LETTERMARK_SIZE = 16;
 const LETTERMARK_CENTER = LETTERMARK_SIZE / 2;
 
