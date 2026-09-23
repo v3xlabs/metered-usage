@@ -1,6 +1,7 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { JSX } from "@solidjs/web";
+import { FiLogOut } from "solid-icons/fi";
 import { TbOutlineChevronDown } from "solid-icons/tb";
 import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 
@@ -90,9 +91,11 @@ const SignOutButton = () => {
       <button
         type="button"
         onClick={() => void leave()}
-        class="rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover dark:text-slate-300"
+        aria-label="Sign out"
+        title="Sign out"
+        class="flex size-8 items-center justify-center rounded-control bg-raised text-slate-700 hover:bg-raised-hover dark:text-slate-300"
       >
-        Sign out
+        <FiLogOut size={16} aria-hidden="true" />
       </button>
     </>
   );
@@ -113,6 +116,7 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
             </a>
             <Show when={isSignedInView()}>
               <div class="flex flex-wrap items-center gap-1">
+                <AnalyticsMenu pathname={location.pathname} />
                 <For each={NAV_LINKS}>
                   {link => (
                     <a
@@ -124,7 +128,6 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
                     </a>
                   )}
                 </For>
-                <AnalyticsMenu pathname={location.pathname} />
               </div>
             </Show>
           </nav>

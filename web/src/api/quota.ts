@@ -1,22 +1,11 @@
 import type { Result } from "./client";
-import { api } from "./client";
+import { api, settle } from "./client";
 import type { components } from "./schema.gen";
 
 export type QuotaAccount = components["schemas"]["QuotaAccount"];
 export type QuotaWindow = components["schemas"]["QuotaWindow"];
 export type Cooldown = components["schemas"]["Cooldown"];
 export type QuotaRefresh = components["schemas"]["QuotaRefresh"];
-
-// The panel keeps its last good data on any failure, so a dropped connection is reported
-// like an error status instead of rejecting.
-const settle = async <Value>(request: () => Promise<Result<Value>>): Promise<Result<Value>> => {
-  try {
-    return await request();
-  }
-  catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : "The request did not complete." };
-  }
-};
 
 export const fetchQuota = async (): Promise<Result<readonly QuotaAccount[]>> =>
   settle(async () => {

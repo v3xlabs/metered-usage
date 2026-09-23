@@ -11,6 +11,7 @@ use crate::analytics::breakdown::{Breakdown, BreakdownRow};
 use crate::analytics::bucket::Bucket;
 use crate::analytics::dimension::{Dimension, Dimensions, SourceRef};
 use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::health::{AccountHealth, Health, HealthBucket, HealthWindow};
 use crate::analytics::metrics::{RankBy, UsageMetrics};
 use crate::analytics::series::{SeriesBucket, SeriesQuery};
 use crate::analytics::session::SessionUsage;
@@ -28,10 +29,13 @@ const MAX_BREAKDOWN_LIMIT: usize = 500;
 const DEFAULT_SESSION_LIMIT: usize = 20;
 const MAX_SESSION_LIMIT: usize = 200;
 const SECONDS_PER_MINUTE: i32 = 60;
+const DEFAULT_HEALTH_WINDOW_MINUTES: u32 = 60;
+const DEFAULT_HEALTH_BUCKET_MINUTES: u32 = 5;
 
-/// Every endpoint takes the same window and filters: `from` and `to` are RFC 3339 with
-/// `to` exclusive and defaulting to now, and `from` absent starting at the first matching
-/// event. `utc_offset_minutes` places day and week boundaries in the viewer's local time.
+/// Every endpoint but `health` takes the same window and filters: `from` and `to` are
+/// RFC 3339 with `to` exclusive and defaulting to now, and `from` absent starting at the
+/// first matching event. `utc_offset_minutes` places day and week boundaries in the
+/// viewer's local time.
 /// Each filter takes comma separated values, any of which may match; different filters
 /// must all match. The harness `unknown` matches events that name no harness.
 pub struct AnalyticsApi {
@@ -297,6 +301,54 @@ impl AnalyticsApi {
             Err(error) => match refusal("analytics_dimensions", error) {
                 Refusal::Invalid(error) => DimensionsResponse::Invalid(Json(error)),
                 Refusal::Failed(error) => DimensionsResponse::Failed(Json(error)),
+            },
+        }
+    }
+
+    /// Requests and failures per account in the last `window_minutes`, cut into buckets
+    /// of `bucket_minutes` aligned to whole multiples of it since the Unix epoch. Every
+    /// account has every bucket, oldest first, the last one holding now. An account with
+    /// no request in the window is present only when `account_id` names it.
+    #[oai(
+        path = "/analytics/health",
+        method = "get",
+        operation_id = "analytics_health"
+    )]
+    async fn analytics_health(
+        &self,
+        window_minutes: Query<Option<u32>>,
+        bucket_minutes: Query<Option<u32>>,
+        #[oai(explode = false, default)] source_id: Query<Vec<String>>,
+        #[oai(explode = false, default)] account_id: Query<Vec<String>>,
+    ) -> HealthResponse {
+        let window = match HealthWindow::new(
+            window_minutes.0.unwrap_or(DEFAULT_HEALTH_WINDOW_MINUTES),
+            bucket_minutes.0.unwrap_or(DEFAULT_HEALTH_BUCKET_MINUTES),
+        ) {
+            Ok(window) => window,
+            Err(error) => return HealthResponse::Invalid(Json(message(&error.to_string()))),
+        };
+        let (source_ids, account_ids) = match (
+            ids(source_id.0, "source_id must be source ids"),
+            ids(account_id.0, "account_id must be account ids"),
+        ) {
+            (Ok(source_ids), Ok(account_ids)) => (source_ids, account_ids),
+            (Err(error), _) | (_, Err(error)) => return HealthResponse::Invalid(Json(error)),
+        };
+
+        match Health::load(
+            &self.state.database,
+            window,
+            Timestamp::now(),
+            source_ids,
+            account_ids,
+        )
+        .await
+        {
+            Ok(health) => HealthResponse::Found(Json(health.into())),
+            Err(error) => match refusal("analytics_health", error) {
+                Refusal::Invalid(error) => HealthResponse::Invalid(Json(error)),
+                Refusal::Failed(error) => HealthResponse::Failed(Json(error)),
             },
         }
     }
@@ -680,6 +732,78 @@ impl From<SourceRef> for SourceRefOutput {
             kind: source.kind.into(),
         }
     }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "AccountHealthStrip")]
+struct HealthOutput {
+    bucket_minutes: u32,
+    /// RFC 3339 in UTC, the start of the oldest bucket.
+    buckets_start: String,
+    accounts: Vec<AccountHealthOutput>,
+}
+
+impl From<Health> for HealthOutput {
+    fn from(health: Health) -> Self {
+        Self {
+            bucket_minutes: health.bucket_minutes,
+            buckets_start: health.buckets_start.to_string(),
+            accounts: health
+                .accounts
+                .into_iter()
+                .map(AccountHealthOutput::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "AccountHealth")]
+struct AccountHealthOutput {
+    account_id: String,
+    buckets: Vec<HealthBucketOutput>,
+}
+
+impl From<AccountHealth> for AccountHealthOutput {
+    fn from(account: AccountHealth) -> Self {
+        Self {
+            account_id: account.account_id.encode(),
+            buckets: account
+                .buckets
+                .into_iter()
+                .map(HealthBucketOutput::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "HealthBucket")]
+struct HealthBucketOutput {
+    /// RFC 3339 in UTC.
+    start: String,
+    requests: i64,
+    failures: i64,
+}
+
+impl From<HealthBucket> for HealthBucketOutput {
+    fn from(bucket: HealthBucket) -> Self {
+        Self {
+            start: bucket.start.to_string(),
+            requests: bucket.requests,
+            failures: bucket.failures,
+        }
+    }
+}
+
+#[derive(ApiResponse)]
+enum HealthResponse {
+    #[oai(status = 200)]
+    Found(Json<HealthOutput>),
+    #[oai(status = 400)]
+    Invalid(Json<Error>),
+    #[oai(status = 500)]
+    Failed(Json<Error>),
 }
 
 #[derive(ApiResponse)]

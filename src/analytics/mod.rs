@@ -7,6 +7,7 @@ pub mod breakdown;
 pub mod bucket;
 pub mod dimension;
 pub mod filter;
+pub mod health;
 pub mod metrics;
 pub mod query;
 pub mod series;

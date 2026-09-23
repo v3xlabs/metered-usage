@@ -280,6 +280,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/analytics/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Requests and failures per account in the last `window_minutes`, cut into buckets
+         *     of `bucket_minutes` aligned to whole multiples of it since the Unix epoch. Every
+         *     account has every bucket, oldest first, the last one holding now. An account with
+         *     no request in the window is present only when `account_id` names it.
+         */
+        get: operations["analytics_health"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/dead-letters": {
         parameters: {
             query?: never;
@@ -499,6 +521,19 @@ export interface components {
             /** Format: int64 */
             event_count: number;
         };
+        /** AccountHealth */
+        AccountHealth: {
+            account_id: string;
+            buckets: components["schemas"]["HealthBucket"][];
+        };
+        /** AccountHealthStrip */
+        AccountHealthStrip: {
+            /** Format: uint32 */
+            bucket_minutes: number;
+            /** @description RFC 3339 in UTC, the start of the oldest bucket. */
+            buckets_start: string;
+            accounts: components["schemas"]["AccountHealth"][];
+        };
         /** AccountList */
         AccountList: {
             accounts: components["schemas"]["Account"][];
@@ -632,6 +667,15 @@ export interface components {
         Health: {
             status: string;
             version: string;
+        };
+        /** HealthBucket */
+        HealthBucket: {
+            /** @description RFC 3339 in UTC. */
+            start: string;
+            /** Format: int64 */
+            requests: number;
+            /** Format: int64 */
+            failures: number;
         };
         /** IngestInput */
         IngestInput: {
@@ -1661,6 +1705,46 @@ export interface operations {
                 };
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["Dimensions"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    analytics_health: {
+        parameters: {
+            query?: {
+                window_minutes?: number;
+                bucket_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["AccountHealthStrip"];
                 };
             };
             400: {

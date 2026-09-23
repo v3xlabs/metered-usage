@@ -49,6 +49,7 @@ export const PlanLeveragePage = () => {
                         {account => (
                           <AccountPlans
                             account={account}
+                            detectedPlan={account.plan}
                             plans={plans().filter(plan => plan.account.account_id === account.account_id)}
                             periodsOf={planId => periodsByPlan().get(planId) ?? []}
                             onChanged={reload}

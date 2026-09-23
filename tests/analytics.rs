@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use jiff::Timestamp;
-use metered_usage::account::{AuthKind, NewAccount};
+use jiff::{SignedDuration, Timestamp};
+use metered_usage::account::{self, AuthKind, NewAccount};
+use metered_usage::analytics::health::{Health, HealthBucket, HealthWindow};
 use metered_usage::app::AppState;
 use metered_usage::config::Config;
 use metered_usage::database::Database;
 use metered_usage::http::auth::Token;
+use metered_usage::id::Id;
 use metered_usage::price::ModelPrice;
 use metered_usage::source::Source;
 use metered_usage::usage::NewUsageEvent;
@@ -26,6 +28,27 @@ type Failure = Box<dyn std::error::Error>;
 
 struct Harness<E> {
     client: TestClient<E>,
+    state: Arc<AppState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HealthStrip {
+    bucket_minutes: i64,
+    buckets_start: String,
+    accounts: Vec<StripAccount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StripAccount {
+    account_id: String,
+    buckets: Vec<StripBucket>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StripBucket {
+    start: String,
+    requests: i64,
+    failures: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +235,19 @@ impl<E: Endpoint> Harness<E> {
             .map(|source| source.source_id)
             .ok_or_else(|| format!("no source {key}").into())
     }
+
+    async fn ingest(&self, key: &str, requests: &[Request]) -> Result<(), Failure> {
+        let source = Source::by_key(&self.state.database, key)
+            .await?
+            .ok_or("a configured source")?;
+        let records = requests
+            .iter()
+            .map(|each| request(each).map(|event| Incoming::Record(Box::new(event))))
+            .collect::<Result<Vec<_>, _>>()?;
+        let report = ingest(&self.state, source.id, records).await?;
+        assert_eq!(report.accepted, i64::try_from(requests.len())?);
+        Ok(())
+    }
 }
 
 fn request(request: &Request) -> Result<NewUsageEvent, Failure> {
@@ -299,20 +335,13 @@ async fn harness() -> Result<Harness<impl Endpoint>, Failure> {
         .await;
     created.assert_status_is_ok();
 
+    let harness = Harness { client, state };
     for (key, requests) in requests() {
-        let source = Source::by_key(&state.database, key)
-            .await?
-            .ok_or("a configured source")?;
-        let records = requests
-            .iter()
-            .map(|each| request(each).map(|event| Incoming::Record(Box::new(event))))
-            .collect::<Result<Vec<_>, _>>()?;
-        let report = ingest(&state, source.id, records).await?;
-        assert_eq!(report.accepted, i64::try_from(requests.len())?);
+        harness.ingest(key, &requests).await?;
     }
-    ModelPrice::fill(&state).await?;
+    ModelPrice::fill(&harness.state).await?;
 
-    Ok(Harness { client })
+    Ok(harness)
 }
 
 /// The events of the table on [`harness`].
@@ -801,6 +830,203 @@ async fn an_id_that_names_nothing_is_refused() -> Result<(), Failure> {
         .send()
         .await;
     too_long.assert_status(StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+/// Five minute buckets of the hour that ends with the bucket holding 12:07, so from 11:10
+/// to 12:10. `before` and `after` fall just outside it, `edge` in the last instant of its
+/// first bucket.
+fn health_requests() -> Vec<Request> {
+    let base = Request {
+        upstream_id: "",
+        at: "",
+        model: SONNET,
+        provider: "claude",
+        account: ("h1", AuthKind::ApiKey),
+        harness: None,
+        session: None,
+        input: 0,
+        cache_read: 0,
+        cache_write: 0,
+        output: 0,
+        latency_ms: None,
+        ttft_ms: None,
+        failed: false,
+    };
+    let at = |upstream_id, at| Request {
+        upstream_id,
+        at,
+        ..base
+    };
+    vec![
+        at("before", "2026-05-10T11:09:59Z"),
+        at("first", "2026-05-10T11:10:00Z"),
+        at("edge", "2026-05-10T11:14:59.999999999Z"),
+        Request {
+            failed: true,
+            ..at("failed", "2026-05-10T11:40:00Z")
+        },
+        at("beside", "2026-05-10T11:41:00Z"),
+        at("current", "2026-05-10T12:06:00Z"),
+        at("after", "2026-05-10T12:10:00Z"),
+        Request {
+            account: ("h2", AuthKind::ApiKey),
+            failed: true,
+            ..at("other", "2026-05-10T11:55:00Z")
+        },
+    ]
+}
+
+fn health_buckets(health: &Health, id: Id<account::Account>) -> Vec<HealthBucket> {
+    health
+        .accounts
+        .iter()
+        .find(|account| account.account_id == id)
+        .map(|account| account.buckets.clone())
+        .unwrap_or_default()
+}
+
+/// Requests and failures per bucket: zero except at the given indices.
+fn health_counts(buckets: &[HealthBucket]) -> Vec<(usize, i64, i64)> {
+    buckets
+        .iter()
+        .enumerate()
+        .filter(|(_, bucket)| bucket.requests != 0 || bucket.failures != 0)
+        .map(|(index, bucket)| (index, bucket.requests, bucket.failures))
+        .collect()
+}
+
+#[tokio::test]
+async fn health_counts_each_account_per_epoch_aligned_bucket() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.ingest("alpha", &health_requests()).await?;
+    let h1 = harness
+        .account("h1")
+        .await?
+        .parse::<Id<account::Account>>()?;
+    let h2 = harness
+        .account("h2")
+        .await?
+        .parse::<Id<account::Account>>()?;
+    let window = HealthWindow::new(60, 5)?;
+    let load = async |now: &str| -> Result<Health, Failure> {
+        Ok(Health::load(
+            &harness.state.database,
+            window,
+            now.parse()?,
+            Vec::new(),
+            Vec::new(),
+        )
+        .await?)
+    };
+
+    let health = load("2026-05-10T12:07:00Z").await?;
+    let start = "2026-05-10T11:10:00Z".parse::<Timestamp>()?;
+    assert_eq!(health.buckets_start, start);
+    let mut ids = vec![h1, h2];
+    ids.sort();
+    assert_eq!(
+        health
+            .accounts
+            .iter()
+            .map(|account| account.account_id)
+            .collect::<Vec<_>>(),
+        ids
+    );
+    let first = health_buckets(&health, h1);
+    assert_eq!(
+        first.iter().map(|bucket| bucket.start).collect::<Vec<_>>(),
+        (0..12)
+            .map(|index| start + SignedDuration::from_mins(5 * index))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(health_counts(&first), [(0, 2, 0), (6, 2, 1), (11, 1, 0)]);
+    let second = health_buckets(&health, h2);
+    assert_eq!(second.len(), 12);
+    assert_eq!(health_counts(&second), [(9, 1, 1)]);
+
+    let same_bucket = load("2026-05-10T12:09:59Z").await?;
+    assert_eq!(same_bucket.buckets_start, start);
+    assert_eq!(health_buckets(&same_bucket, h1), first);
+
+    let next_bucket = load("2026-05-10T12:12:00Z").await?;
+    let shifted = health_buckets(&next_bucket, h1);
+    assert_eq!(shifted[..11], first[1..]);
+    assert_eq!(
+        shifted[11],
+        HealthBucket {
+            start: "2026-05-10T12:10:00Z".parse()?,
+            requests: 1,
+            failures: 0,
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_health_strip_zero_fills_a_named_idle_account_and_refuses_a_bad_window()
+-> Result<(), Failure> {
+    let harness = harness().await?;
+    let a1 = harness.account("a1").await?;
+
+    let before = Timestamp::now();
+    let strip = harness
+        .get::<HealthStrip>(&format!("/api/analytics/health?account_id={a1}"))
+        .await;
+    let after = Timestamp::now();
+    assert_eq!(strip.bucket_minutes, 5);
+    let [account] = strip.accounts.as_slice() else {
+        panic!("one account, got {:?}", strip.accounts);
+    };
+    assert_eq!(account.account_id, a1);
+    assert_eq!(account.buckets.len(), 12);
+    assert!(
+        account
+            .buckets
+            .iter()
+            .all(|bucket| bucket.requests == 0 && bucket.failures == 0)
+    );
+    let starts = account
+        .buckets
+        .iter()
+        .map(|bucket| bucket.start.parse::<Timestamp>())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(starts[0], strip.buckets_start.parse::<Timestamp>()?);
+    assert_eq!(starts[0].as_second() % 300, 0);
+    assert!(
+        starts
+            .windows(2)
+            .all(|pair| pair[1].duration_since(pair[0]) == SignedDuration::from_mins(5))
+    );
+    let last = starts[11];
+    assert!(last <= after && before < last + SignedDuration::from_mins(5));
+
+    let unnamed = harness.get::<HealthStrip>("/api/analytics/health").await;
+    assert!(unnamed.accounts.is_empty());
+
+    let widest = harness
+        .get::<HealthStrip>(&format!(
+            "/api/analytics/health?window_minutes=1440&bucket_minutes=5&account_id={a1}"
+        ))
+        .await;
+    assert_eq!(widest.accounts[0].buckets.len(), 288);
+
+    for query in [
+        "window_minutes=60&bucket_minutes=7",
+        "window_minutes=1440&bucket_minutes=1",
+        "window_minutes=4&bucket_minutes=1",
+        "window_minutes=1445&bucket_minutes=5",
+        "bucket_minutes=0",
+    ] {
+        let response = harness
+            .client
+            .get(format!("/api/analytics/health?{query}"))
+            .send()
+            .await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
 
     Ok(())
 }

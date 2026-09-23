@@ -1,117 +1,228 @@
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, Errored, For, Loading, refresh, Show } from "solid-js";
+import { TbOutlinePencil } from "solid-icons/tb";
+import type { Accessor } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, onSettled, refresh, Show } from "solid-js";
 
+import type { AccountHealthStrip } from "../api/accountHealth";
 import type { Account } from "../api/accounts";
 import { listAccounts, setDisplayName } from "../api/accounts";
+import { settle } from "../api/client";
 import { listDeadLetters } from "../api/deadLetters";
 import type { Source } from "../api/sources";
 import { listSources } from "../api/sources";
 import { AccountName, AuthKindIcon } from "../components/AccountName";
+import { AccountSettings } from "../components/AccountSettings";
 import { DeadLetterList } from "../components/DeadLetterList";
-import { MergeControl } from "../components/MergeControl";
+import { createAccountHealth, HealthStrip } from "../components/HealthStrip";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { SourceList } from "../components/SourceList";
-import { groupBySource } from "../domain/account";
+import { accountLabel, groupBySource } from "../domain/account";
 import { formatExact, formatMoment } from "../domain/format";
 
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
+const NameView = (properties: { account: Account; isFocused: boolean; onEdit: () => void; }) => {
+  let nameButton: HTMLButtonElement | undefined;
 
-const AccountRow = (properties: {
+  onSettled(() => {
+    if (properties.isFocused) nameButton?.focus();
+  });
+
+  return (
+    <span class="group flex min-w-0 items-center gap-1">
+      <button
+        ref={(element) => {
+          nameButton = element;
+        }}
+        type="button"
+        onClick={() => properties.onEdit()}
+        class="-mx-1 flex min-w-0 rounded-control px-1 py-0.5 text-left hover:bg-raised"
+      >
+        <AccountName account={properties.account} isSourceShown={false} />
+      </button>
+      <button
+        type="button"
+        onClick={() => properties.onEdit()}
+        aria-label={`Rename ${accountLabel(properties.account)}`}
+        title="Rename"
+        class="flex size-6 shrink-0 items-center justify-center rounded-control text-slate-500 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-raised hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100"
+      >
+        <TbOutlinePencil size={14} aria-hidden="true" />
+      </button>
+    </span>
+  );
+};
+
+const NameInput = (properties: {
   account: Account;
-  mergeCandidates: readonly Account[];
-  onChanged: () => void;
+  isSaving: boolean;
+  onCommit: (value: string, isKeyboard: boolean) => void;
+  onCancel: () => void;
 }) => {
-  const [draft, setDraft] = createSignal(properties.account.display_name ?? "");
-  const [failure, setFailure] = createSignal<string | null>(null);
-  const [isSaving, setIsSaving] = createSignal(false);
+  let input: HTMLInputElement | undefined;
   const inputId = `display-name-${properties.account.account_id}`;
+  const [draft, setDraft] = createSignal(properties.account.display_name ?? properties.account.label ?? "");
 
-  const save = async (displayName: string): Promise<void> => {
+  onSettled(() => {
+    input?.focus();
+    input?.select();
+  });
+
+  return (
+    <span class="flex min-w-0 items-center">
+      <label for={inputId} class="sr-only">{`Display name of ${accountLabel(properties.account)}`}</label>
+      <input
+        ref={(element) => {
+          input = element;
+        }}
+        id={inputId}
+        type="text"
+        value={draft()}
+        onInput={event => setDraft(event.currentTarget.value)}
+        placeholder={properties.account.label ?? "Display name"}
+        readonly={properties.isSaving}
+        aria-busy={properties.isSaving ? "true" : undefined}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            properties.onCommit(event.currentTarget.value, true);
+          }
+          else if (event.key === "Escape") {
+            event.preventDefault();
+            properties.onCancel();
+          }
+        }}
+        onBlur={event => properties.onCommit(event.currentTarget.value, false)}
+        class={["w-56 rounded-control bg-raised px-2 py-0.5 text-sm text-slate-900 dark:text-slate-100", properties.isSaving && "opacity-60"]}
+      />
+    </span>
+  );
+};
+
+const DisplayName = (properties: { account: Account; onChanged: () => void; }) => {
+  const [isEditing, setIsEditing] = createSignal(false);
+  const [isSaving, setIsSaving] = createSignal(false);
+  const [isNameFocused, setIsNameFocused] = createSignal(false);
+  const [failure, setFailure] = createSignal<string | null>(null);
+  // Enter and Escape unmount the input, which can also blur it; only the first ends the edit.
+  let isSettled = false;
+
+  const edit = (): void => {
+    isSettled = false;
+    setFailure(null);
+    setIsEditing(true);
+  };
+
+  const close = (isKeyboard: boolean): void => {
+    setIsNameFocused(isKeyboard);
+    setIsEditing(false);
+  };
+
+  const commit = async (value: string, isKeyboard: boolean): Promise<void> => {
+    if (isSettled) return;
+
+    isSettled = true;
+
+    const next = value.trim();
+    const isUnchanged = next === (properties.account.display_name ?? "")
+      || (properties.account.display_name === undefined && next === properties.account.label);
+
+    if (isUnchanged) {
+      setFailure(null);
+      close(isKeyboard);
+
+      return;
+    }
+
     setIsSaving(true);
 
-    const result = await setDisplayName(properties.account.account_id, displayName);
+    const result = await settle(async () => setDisplayName(properties.account.account_id, next));
 
     setIsSaving(false);
 
     if (!result.ok) {
+      isSettled = false;
       setFailure(result.message);
 
       return;
     }
 
     setFailure(null);
+    close(isKeyboard);
     properties.onChanged();
   };
 
+  const cancel = (): void => {
+    if (isSettled) return;
+
+    isSettled = true;
+    setFailure(null);
+    close(true);
+  };
+
   return (
-    <li class="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-      <div class="min-w-64 flex-1 space-y-0.5 text-sm">
-        <span class="flex min-w-0 items-center gap-1.5">
-          <AccountName account={properties.account} isSourceShown={false} />
-          <AuthKindIcon authKind={properties.account.auth_kind} />
-        </span>
-        <dl class="flex flex-wrap gap-x-3 text-xs">
-          <Show when={properties.account.account_type}>
-            {accountType => (
-              <div class="flex gap-1">
-                <dt class="text-slate-500 dark:text-slate-500">Type</dt>
-                <dd class="text-slate-700 dark:text-slate-300">{accountType()}</dd>
-              </div>
-            )}
-          </Show>
-          <Show when={properties.account.plan}>
-            {plan => (
-              <div class="flex gap-1">
-                <dt class="text-slate-500 dark:text-slate-500">Plan</dt>
-                <dd class="text-slate-700 dark:text-slate-300">{plan()}</dd>
-              </div>
-            )}
-          </Show>
-        </dl>
-      </div>
-      <div class="text-right">
-        <p class="text-sm text-slate-900 tabular-nums dark:text-slate-100">{formatExact(properties.account.event_count)}</p>
-        <p class="text-xs text-slate-500 dark:text-slate-500">events</p>
-      </div>
-      <dl class="grid grid-cols-[auto_auto] gap-x-2 text-xs">
-        <dt class="text-slate-500 dark:text-slate-500">First seen</dt>
-        <dd class="text-slate-600 tabular-nums dark:text-slate-300">{formatMoment(properties.account.first_seen_at)}</dd>
-        <dt class="text-slate-500 dark:text-slate-500">Last seen</dt>
-        <dd class="text-slate-600 tabular-nums dark:text-slate-300">{formatMoment(properties.account.last_seen_at)}</dd>
-      </dl>
-      <form
-        class="flex items-center gap-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void save(draft().trim());
-        }}
-      >
-        <label for={inputId} class="sr-only">Display name</label>
-        <input
-          id={inputId}
-          type="text"
-          value={draft()}
-          onInput={event => setDraft(event.currentTarget.value)}
-          placeholder="Display name"
-          class="w-44 rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100"
-        />
-        <button type="submit" disabled={isSaving()} class={CONTROL_BUTTON}>Save</button>
-        <button
-          type="button"
-          disabled={isSaving() || properties.account.display_name === undefined}
-          onClick={() => void save("")}
-          class={CONTROL_BUTTON}
+    <div class="space-y-1">
+      <span class="flex min-w-0 items-center gap-1.5">
+        <Show
+          when={isEditing()}
+          fallback={<NameView account={properties.account} isFocused={isNameFocused()} onEdit={edit} />}
         >
-          Clear
-        </button>
-      </form>
+          <NameInput
+            account={properties.account}
+            isSaving={isSaving()}
+            onCommit={(value, isKeyboard) => void commit(value, isKeyboard)}
+            onCancel={cancel}
+          />
+        </Show>
+        <AuthKindIcon authKind={properties.account.auth_kind} />
+      </span>
       <Show when={failure()}>
-        {message => <p class="w-full text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-xs text-red-600 dark:text-red-400" role="alert">{`Rename failed: ${message()}`}</p>}
       </Show>
-      <MergeControl account={properties.account} candidates={properties.mergeCandidates} onMerged={properties.onChanged} />
-    </li>
+    </div>
   );
 };
+
+const AccountRow = (properties: {
+  account: Account;
+  mergeCandidates: readonly Account[];
+  health: Accessor<AccountHealthStrip>;
+  onChanged: () => void;
+}) => (
+  <li class="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
+    <div class="min-w-64 flex-1 space-y-0.5 text-sm">
+      <DisplayName account={properties.account} onChanged={properties.onChanged} />
+      <dl class="flex flex-wrap gap-x-3 text-xs">
+        <Show when={properties.account.account_type}>
+          {accountType => (
+            <div class="flex gap-1">
+              <dt class="text-slate-500 dark:text-slate-500">Type</dt>
+              <dd class="text-slate-700 dark:text-slate-300">{accountType()}</dd>
+            </div>
+          )}
+        </Show>
+        <Show when={properties.account.plan}>
+          {plan => (
+            <div class="flex gap-1">
+              <dt class="text-slate-500 dark:text-slate-500">Plan</dt>
+              <dd class="text-slate-700 dark:text-slate-300">{plan()}</dd>
+            </div>
+          )}
+        </Show>
+      </dl>
+    </div>
+    <HealthStrip accountId={properties.account.account_id} strip={properties.health} />
+    <div class="text-right">
+      <p class="text-sm text-slate-900 tabular-nums dark:text-slate-100">{formatExact(properties.account.event_count)}</p>
+      <p class="text-xs text-slate-500 dark:text-slate-500">events</p>
+    </div>
+    <dl class="grid grid-cols-[auto_auto] gap-x-2 text-xs">
+      <dt class="text-slate-500 dark:text-slate-500">First seen</dt>
+      <dd class="text-slate-600 tabular-nums dark:text-slate-300">{formatMoment(properties.account.first_seen_at)}</dd>
+      <dt class="text-slate-500 dark:text-slate-500">Last seen</dt>
+      <dd class="text-slate-600 tabular-nums dark:text-slate-300">{formatMoment(properties.account.last_seen_at)}</dd>
+    </dl>
+    <AccountSettings account={properties.account} candidates={properties.mergeCandidates} onMerged={properties.onChanged} />
+  </li>
+);
 
 const DeadLetterRegion = (properties: { source: Source; }) => {
   const deadLetters = createMemo(() => listDeadLetters(properties.source.source_id));
@@ -159,9 +270,11 @@ const SourcesSection = () => {
 
 const AccountsSection = () => {
   const accounts = createMemo(() => listAccounts());
+  const health = createAccountHealth();
 
   const reload = (): void => {
     refresh(accounts);
+    refresh(health);
   };
 
   return (
@@ -181,16 +294,18 @@ const AccountsSection = () => {
             fallback={<p class="rounded-panel bg-surface px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-500">No accounts seen yet.</p>}
           >
             <div class="space-y-4">
-              <For each={groupBySource(accounts(), account => account)}>
+              <For each={groupBySource(accounts(), account => account)} keyed={group => group.sourceId}>
                 {group => (
-                  <section class="space-y-2" aria-label={`Accounts of ${group.sourceName}`}>
-                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group.sourceName}</h3>
+                  <section class="space-y-2" aria-label={`Accounts of ${group().sourceName}`}>
+                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group().sourceName}</h3>
                     <ul class="divide-y divide-hairline overflow-hidden rounded-panel bg-surface">
-                      <For each={group.entries}>
+                      <For each={group().entries} keyed={account => account.account_id}>
                         {account => (
                           <AccountRow
-                            account={account}
-                            mergeCandidates={group.entries.filter(candidate => candidate.account_id !== account.account_id)}
+                            account={account()}
+                            mergeCandidates={group().entries.filter(candidate =>
+                              candidate.account_id !== account().account_id && candidate.merged_into_account_id === undefined)}
+                            health={health}
                             onChanged={reload}
                           />
                         )}

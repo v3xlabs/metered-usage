@@ -4,6 +4,17 @@ import type { paths } from "./schema.gen";
 
 export type Result<Value> = { ok: true; value: Value; } | { ok: false; message: string; };
 
+// A caller that keeps its last good state on any failure reports a dropped connection like
+// an error status instead of rejecting.
+export const settle = async <Value>(request: () => Promise<Result<Value>>): Promise<Result<Value>> => {
+  try {
+    return await request();
+  }
+  catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "The request did not complete." };
+  }
+};
+
 export const LOGIN_PATH = "/login";
 
 // A full navigation drops every in-flight region of the page that failed, so no stale

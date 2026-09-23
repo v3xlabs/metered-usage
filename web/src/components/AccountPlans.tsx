@@ -1,4 +1,5 @@
-import { createSignal, For, Show } from "solid-js";
+import { TbOutlineCreditCard } from "solid-icons/tb";
+import { createSignal, For, onSettled, Show } from "solid-js";
 
 import type { AccountSummary } from "../api/accounts";
 import type { Result } from "../api/client";
@@ -22,6 +23,7 @@ type PlanDraft = { name: string; monthlyUsd: number; periodStart: string; period
 const PlanForm = (properties: {
   formId: string;
   initial: Plan | undefined;
+  suggestedName: string | undefined;
   submitLabel: string;
   onSubmit: (draft: PlanDraft) => Promise<Result<Plan>>;
   onDone: () => void;
@@ -29,6 +31,11 @@ const PlanForm = (properties: {
 }) => {
   const [failure, setFailure] = createSignal<string | null>(null);
   const [isSubmitting, setIsSubmitting] = createSignal(false);
+  let monthlyInput: HTMLInputElement | undefined;
+
+  onSettled(() => {
+    if (properties.suggestedName !== undefined) monthlyInput?.focus();
+  });
 
   const submit = async (event: SubmitEvent & { currentTarget: HTMLFormElement; }): Promise<void> => {
     event.preventDefault();
@@ -76,13 +83,16 @@ const PlanForm = (properties: {
             name="name"
             type="text"
             required
-            value={properties.initial?.name ?? ""}
+            value={properties.initial?.name ?? properties.suggestedName ?? ""}
             class={FIELD}
           />
         </div>
         <div class="w-28 space-y-1">
           <label for={`${properties.formId}-monthly`} class={FIELD_LABEL}>Monthly USD</label>
           <input
+            ref={(element) => {
+              monthlyInput = element;
+            }}
             id={`${properties.formId}-monthly`}
             name="monthly_usd"
             type="number"
@@ -242,6 +252,7 @@ const PlanEntry = (properties: { plan: Plan; periods: readonly LeveragePeriod[];
         <PlanForm
           formId={`plan-${properties.plan.plan_id}`}
           initial={properties.plan}
+          suggestedName={undefined}
           submitLabel="Save plan"
           onSubmit={draft => updatePlan(properties.plan.plan_id, {
             name: draft.name,
@@ -264,28 +275,60 @@ const PlanEntry = (properties: { plan: Plan; periods: readonly LeveragePeriod[];
   );
 };
 
+type Adding = { suggestedName: string | undefined; };
+
 export const AccountPlans = (properties: {
   account: AccountSummary;
+  detectedPlan: string | undefined;
   plans: readonly Plan[];
   periodsOf: (planId: string) => readonly LeveragePeriod[];
   onChanged: () => void;
 }) => {
-  const [isAdding, setIsAdding] = createSignal(false);
+  const [adding, setAdding] = createSignal<Adding | undefined>();
 
   return (
     <li class="space-y-2 rounded-panel bg-surface p-4">
-      <div class="flex items-center gap-2">
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span class="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
           <AccountName account={properties.account} isSourceShown={false} />
           <AuthKindIcon authKind={properties.account.auth_kind} />
         </span>
-        <Show when={!isAdding()}>
-          <button type="button" onClick={() => setIsAdding(true)} class={[CONTROL_BUTTON, "shrink-0"]}>Add plan</button>
+        <Show when={properties.detectedPlan}>
+          {plan => (
+            <span class="flex min-w-0 items-center gap-1 text-xs">
+              <span class="flex shrink-0 text-slate-500 dark:text-slate-400">
+                <TbOutlineCreditCard size={14} aria-hidden="true" />
+              </span>
+              <span class="truncate font-semibold text-slate-900 dark:text-slate-100">{plan()}</span>
+              <span class="shrink-0 text-slate-500 dark:text-slate-400">detected by CLIProxy</span>
+            </span>
+          )}
+        </Show>
+        <Show when={adding() === undefined}>
+          <button type="button" onClick={() => setAdding({ suggestedName: undefined })} class={[CONTROL_BUTTON, "shrink-0"]}>Add plan</button>
         </Show>
       </div>
       <Show
         when={properties.plans.length > 0}
-        fallback={<p class="text-sm text-slate-500 dark:text-slate-500">No plan.</p>}
+        fallback={(
+          <Show
+            when={properties.detectedPlan}
+            fallback={<p class="text-sm text-slate-500 dark:text-slate-500">No subscription plan.</p>}
+          >
+            {plan => (
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <p class="text-sm text-slate-600 dark:text-slate-400">
+                  {`No price entered for the ${plan()} plan, so its leverage is unknown.`}
+                </p>
+                <Show when={adding() === undefined}>
+                  <button type="button" onClick={() => setAdding({ suggestedName: plan() })} class={[CONTROL_BUTTON, "shrink-0"]}>
+                    Track this plan
+                  </button>
+                </Show>
+              </div>
+            )}
+          </Show>
+        )}
       >
         <ul class="divide-y divide-hairline">
           <For each={properties.plans}>
@@ -293,26 +336,29 @@ export const AccountPlans = (properties: {
           </For>
         </ul>
       </Show>
-      <Show when={isAdding()}>
-        <section class="space-y-2 rounded-control bg-canvas p-3" aria-label={`New plan for ${accountLabel(properties.account)}`}>
-          <PlanForm
-            formId={`new-plan-${properties.account.account_id}`}
-            initial={undefined}
-            submitLabel="Add plan"
-            onSubmit={draft => createPlan({
-              account_id: properties.account.account_id,
-              name: draft.name,
-              monthly_usd: draft.monthlyUsd,
-              period_start: draft.periodStart,
-              ...(draft.periodEnd !== undefined && { period_end: draft.periodEnd }),
-            })}
-            onDone={() => {
-              setIsAdding(false);
-              properties.onChanged();
-            }}
-            onCancel={() => setIsAdding(false)}
-          />
-        </section>
+      <Show when={adding()}>
+        {draft => (
+          <section class="space-y-2 rounded-control bg-canvas p-3" aria-label={`New plan for ${accountLabel(properties.account)}`}>
+            <PlanForm
+              formId={`new-plan-${properties.account.account_id}`}
+              initial={undefined}
+              suggestedName={draft().suggestedName}
+              submitLabel="Add plan"
+              onSubmit={planDraft => createPlan({
+                account_id: properties.account.account_id,
+                name: planDraft.name,
+                monthly_usd: planDraft.monthlyUsd,
+                period_start: planDraft.periodStart,
+                ...(planDraft.periodEnd !== undefined && { period_end: planDraft.periodEnd }),
+              })}
+              onDone={() => {
+                setAdding(undefined);
+                properties.onChanged();
+              }}
+              onCancel={() => setAdding(undefined)}
+            />
+          </section>
+        )}
       </Show>
     </li>
   );
