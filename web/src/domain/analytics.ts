@@ -1,4 +1,3 @@
-import type { AccountSummary } from "../api/accounts";
 import type { AnalyticsFilters, Bucket, Dimensions, FilterDimension, RankBy, UsageMetrics } from "../api/analytics";
 import { providerLabel } from "../components/ProviderIcon";
 import { accountLabel } from "./account";
@@ -161,9 +160,6 @@ export const autoBucket = (days: number): Bucket => {
 
 export const utcOffsetMinutes = (): number => -new Date().getTimezoneOffset();
 
-export const accountName = (account: AccountSummary): string =>
-  `${accountLabel(account)} (${providerLabel(account.provider)}, ${redact(account.source_name)})`;
-
 export type KeyLabel = { text: string; provider?: string; };
 
 // Keys are raw stored values; accounts and sources are opaque ids that only the
@@ -178,7 +174,7 @@ export const labelKey = (dimension: FilterDimension | "session", key: string, di
   if (dimension === "account") {
     const account = dimensions?.accounts.find(candidate => candidate.account_id === key);
 
-    return account === undefined ? { text: redact(key) } : { text: accountName(account), provider: account.provider };
+    return account === undefined ? { text: redact(key) } : { text: accountLabel(account), provider: account.provider };
   }
 
   if (dimension === "source") {

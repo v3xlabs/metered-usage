@@ -28,7 +28,7 @@ export const AuthKindIcon = (properties: { authKind: AuthKind; }) => (
 );
 
 export const AccountName = (properties: { account: AccountSummary; isSourceShown: boolean; }) => (
-  <span class="inline-flex min-w-0 items-center gap-1.5">
+  <span class="inline-flex max-w-full min-w-0 items-center gap-1.5">
     <ProviderIcon provider={properties.account.provider} class="size-3.5 text-slate-600 dark:text-slate-300" />
     <span
       title={accountDescription(properties.account)}
