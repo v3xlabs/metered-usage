@@ -468,9 +468,10 @@ async fn a_summary_reports_every_measure_of_the_window() -> Result<(), Failure> 
 
     assert_eq!(summary.range_days, 7);
     assert_eq!(summary.active_days, 2);
-    close(summary.daily_burn.list_cost_usd, 4.158 / 7.0);
-    close(summary.daily_burn.billed_cost_usd, 1.203 / 7.0);
-    assert_eq!(summary.daily_burn.total_tokens, 488_000);
+    // Tracking began on 03-02, so 03-01 does not count towards the rate.
+    close(summary.daily_burn.list_cost_usd, 4.158 / 6.0);
+    close(summary.daily_burn.billed_cost_usd, 1.203 / 6.0);
+    assert_eq!(summary.daily_burn.total_tokens, 569_333);
     let by_cost = summary.peak_day_by_cost.ok_or("a peak day by cost")?;
     assert_eq!(by_cost.day, "2026-03-02");
     close(by_cost.list_cost_usd, 3.708);

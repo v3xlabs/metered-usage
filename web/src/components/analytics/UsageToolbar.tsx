@@ -1,3 +1,4 @@
+import { TbOutlineCalendar } from "solid-icons/tb";
 import { createUniqueId, Errored, For, Loading, Show } from "solid-js";
 
 import type { AnalyticsFilters, Dimensions, FilterDimension } from "../../api/analytics";
@@ -5,9 +6,13 @@ import type { CostBasis, Metric, RangePreset, TokenKind } from "../../domain/ana
 import { DIMENSION_LABELS, dimensionKeys, FILTER_DIMENSIONS, labelKey, RANGE_LABELS, RANGE_PRESETS, TOKEN_KIND_LABELS, TOKEN_KINDS } from "../../domain/analytics";
 import type { PickerOption } from "./FilterPicker";
 import { FilterPicker } from "./FilterPicker";
-import { Segmented } from "./Segmented";
+import type { SegmentOption } from "./Segmented";
+import { Segmented, SegmentedMany } from "./Segmented";
 
-const RANGE_OPTIONS = RANGE_PRESETS.map(preset => ({ value: preset, label: RANGE_LABELS[preset] }));
+const RANGE_OPTIONS = RANGE_PRESETS.map((preset): SegmentOption<RangePreset> => (preset === "custom"
+  ? { value: preset, label: RANGE_LABELS[preset], icon: TbOutlineCalendar }
+  : { value: preset, label: RANGE_LABELS[preset] }));
+const KIND_OPTIONS = TOKEN_KINDS.map(kind => ({ value: kind, label: TOKEN_KIND_LABELS[kind] }));
 const METRIC_OPTIONS: readonly { value: Metric; label: string; }[] = [
   { value: "cost", label: "Cost" },
   { value: "tokens", label: "Tokens" },
@@ -84,25 +89,12 @@ export const UsageToolbar = (properties: {
           options={METRIC_OPTIONS}
           onChoose={properties.onMetric}
         />
-        <fieldset class="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <legend class="sr-only">Token kinds</legend>
-          <For each={TOKEN_KINDS}>
-            {kind => (
-              <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
-                <input
-                  type="checkbox"
-                  checked={properties.kinds.includes(kind)}
-                  disabled={properties.kinds.length === 1 && properties.kinds.includes(kind)}
-                  onChange={event => properties.onKinds(event.currentTarget.checked
-                    ? TOKEN_KINDS.filter(candidate => candidate === kind || properties.kinds.includes(candidate))
-                    : properties.kinds.filter(candidate => candidate !== kind))}
-                  class="accent-blue-600"
-                />
-                {TOKEN_KIND_LABELS[kind]}
-              </label>
-            )}
-          </For>
-        </fieldset>
+        <SegmentedMany
+          label="Token kinds"
+          values={properties.kinds}
+          options={KIND_OPTIONS}
+          onChoose={properties.onKinds}
+        />
         <Segmented
           label="Cost basis"
           value={properties.basis}

@@ -544,7 +544,7 @@ impl From<Summary> for SummaryOutput {
     }
 }
 
-/// The window's totals divided by `range_days`.
+/// The window's totals divided by its local days since the first event ever recorded.
 #[derive(Debug, Object)]
 #[oai(rename = "DailyBurn")]
 struct DailyBurnOutput {

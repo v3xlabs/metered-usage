@@ -20,19 +20,20 @@ export const DIMENSION_LABELS: Record<FilterDimension, string> = {
 
 export const EMPTY_FILTERS: AnalyticsFilters = { model: [], provider: [], account: [], harness: [], source: [] };
 
-export const RANGE_PRESETS = ["7d", "30d", "90d", "mtd", "custom"] as const;
+export const RANGE_PRESETS = ["today", "7d", "30d", "90d", "mtd", "custom"] as const;
 
 export type RangePreset = (typeof RANGE_PRESETS)[number];
 
 export const RANGE_LABELS: Record<RangePreset, string> = {
+  "today": "Today",
   "7d": "7d",
   "30d": "30d",
   "90d": "90d",
   "mtd": "Month to date",
-  "custom": "Custom",
+  "custom": "Custom range",
 };
 
-const PRESET_DAYS: Record<"7d" | "30d" | "90d", number> = { "7d": 7, "30d": 30, "90d": 90 };
+const PRESET_DAYS: Record<"today" | "7d" | "30d" | "90d", number> = { "today": 1, "7d": 7, "30d": 30, "90d": 90 };
 
 export const BUCKETS: readonly Bucket[] = ["hour", "day", "week"];
 
