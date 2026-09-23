@@ -9,7 +9,7 @@ use crate::database::codec::StoredTimestamp;
 use crate::id::Id;
 use crate::source::Source;
 use crate::usage::dead_letter::DeadLetter;
-use crate::usage::{NewUsageEvent, UsageEvent};
+use crate::usage::{NewUsageEvent, UsageEvent, UsageUpdate};
 
 const INSERT: &str = "INSERT INTO usage_event (event_id, source_id, account_id, record_hash, \
      upstream_id, occurred_at, provider, model, model_alias, endpoint, caller, harness, \
@@ -178,7 +178,11 @@ async fn publish(state: &AppState, stored: &[Id<UsageEvent>]) {
         Ok(events) => {
             for event in events {
                 // Every subscriber may have left since the count was read.
-                if state.usage.send(event).is_err() {
+                if state
+                    .usage
+                    .send(UsageUpdate::Recorded(Box::new(event)))
+                    .is_err()
+                {
                     break;
                 }
             }

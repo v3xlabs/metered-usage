@@ -2,7 +2,7 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 
 import type { Account } from "../api/accounts";
 import { mergeAccount } from "../api/accounts";
-import { accountLabel } from "../domain/account";
+import { accountLabel, accountText } from "../domain/account";
 import { formatExact } from "../domain/format";
 
 const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
@@ -50,7 +50,7 @@ export const MergeControl = (properties: { account: Account; candidates: readonl
         >
           <option value="">Choose an account</option>
           <For each={properties.candidates}>
-            {candidate => <option value={candidate.account_id}>{`${candidate.provider} / ${accountLabel(candidate)}`}</option>}
+            {candidate => <option value={candidate.account_id}>{accountText(candidate, false)}</option>}
           </For>
         </select>
         <Show

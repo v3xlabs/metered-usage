@@ -1,4 +1,4 @@
-import type { QuotaAccount, QuotaWindow } from "../api/quota";
+import type { QuotaWindow } from "../api/quota";
 import { formatExact } from "./format";
 
 const SECONDS_PER_MINUTE = 60;
@@ -6,32 +6,6 @@ const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_DAY = 86_400;
 const MILLISECONDS_PER_SECOND = 1000;
 const PERCENT = 100;
-
-export type SourceGroup = {
-  sourceId: string;
-  sourceName: string;
-  accounts: QuotaAccount[];
-};
-
-export const groupBySource = (accounts: readonly QuotaAccount[]): readonly SourceGroup[] => {
-  const sorted = accounts.toSorted((left, right) =>
-    left.account.source_name.localeCompare(right.account.source_name)
-    || left.account.source_id.localeCompare(right.account.source_id));
-  const groups: SourceGroup[] = [];
-
-  for (const entry of sorted) {
-    const last = groups.at(-1);
-
-    if (last?.sourceId === entry.account.source_id) {
-      last.accounts.push(entry);
-      continue;
-    }
-
-    groups.push({ sourceId: entry.account.source_id, sourceName: entry.account.source_name, accounts: [entry] });
-  }
-
-  return groups;
-};
 
 const formatDuration = (totalSeconds: number): string => {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -66,7 +40,35 @@ export const formatAge = (timestamp: string | undefined, nowMs: number): string 
   return `${formatDuration(-secondsBetween(nowMs, timestamp))} ago`;
 };
 
-export const barPercent = (fraction: number): number => Math.min(PERCENT, Math.max(0, fraction * PERCENT));
+const BEHIND_TOLERANCE_MS = 60_000;
+
+export const latestMoment = (timestamps: readonly (string | undefined)[]): string | undefined =>
+  timestamps.reduce<string | undefined>(
+    (latest, timestamp) =>
+      (timestamp !== undefined && (latest === undefined || Date.parse(timestamp) > Date.parse(latest)) ? timestamp : latest),
+    undefined,
+  );
+
+// A card repeats its own age only when it lags the panel's, so accounts refreshed together
+// show a single panel-level age.
+export const isBehind = (timestamp: string | undefined, latest: string | undefined): boolean =>
+  latest !== undefined && (timestamp === undefined || Date.parse(latest) - Date.parse(timestamp) > BEHIND_TOLERANCE_MS);
+
+export type QuotaLevel = "comfortable" | "low" | "exhausted";
+
+const LOW_REMAINING_PERCENT = 30;
+const EXHAUSTED_REMAINING_PERCENT = 10;
+
+export const remainingPercent = (usedFraction: number): number =>
+  Math.min(PERCENT, Math.max(0, (1 - usedFraction) * PERCENT));
+
+export const quotaLevel = (percentLeft: number): QuotaLevel => {
+  if (percentLeft < EXHAUSTED_REMAINING_PERCENT) return "exhausted";
+
+  if (percentLeft < LOW_REMAINING_PERCENT) return "low";
+
+  return "comfortable";
+};
 
 export const formatWindowAmount = (window: QuotaWindow): string | undefined => {
   if (window.used_value === undefined) return undefined;

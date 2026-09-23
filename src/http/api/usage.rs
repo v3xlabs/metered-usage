@@ -7,19 +7,20 @@ use poem::web::sse::Event;
 use poem_openapi::param::{Header, Query};
 use poem_openapi::payload::{EventStream, Json};
 use poem_openapi::types::ToJSON;
-use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
+use poem_openapi::{ApiResponse, Enum, Object, OpenApi, Union};
 use tokio::sync::broadcast;
 
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::account::AccountSummaryOutput;
 use crate::prelude::*;
-use crate::usage::TokenQuality;
+use crate::usage::{PricedEvent, TokenQuality, UsageUpdate};
 
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
-const STREAM_EVENT: &str = "usage";
+const USAGE_EVENT: &str = "usage";
+const PRICED_EVENT: &str = "priced";
 
 pub struct UsageApi {
     pub state: Arc<AppState>,
@@ -85,10 +86,13 @@ impl UsageApi {
         }
     }
 
-    /// Every event as it is committed, as Server-Sent Events of type `usage` whose id is
-    /// the event id. Given `Last-Event-ID`, it first replays up to 500 stored events newer
-    /// than that id, oldest first. A client that falls too far behind is disconnected and
-    /// is expected to reconnect with `Last-Event-ID`.
+    /// Server-Sent Events of two types. `usage` carries each event as it is committed,
+    /// with the event id as its SSE id. `priced` carries a `PricedEvent` each time a price
+    /// fill, periodic or a reprice, commits a cost for an event; it has no SSE id, so
+    /// `Last-Event-ID` keeps naming the last `usage` message. Given `Last-Event-ID`, the
+    /// stream first replays up to 500 stored events newer than that id, oldest first, as
+    /// they now read. A client that falls too far behind is disconnected and is expected
+    /// to reconnect with `Last-Event-ID`.
     #[oai(
         path = "/usage/stream",
         method = "get",
@@ -122,79 +126,24 @@ impl UsageApi {
             },
         };
         let replayed_through = replayed.last().map(|event| event.id);
-        let events = stream::iter(replayed)
+        let messages = stream::iter(replayed)
+            .map(|event| UsageUpdate::Recorded(Box::new(event)))
             .chain(live(receiver, replayed_through))
-            .map(UsageEventOutput::from)
+            .map(StreamMessage::from)
             .boxed();
 
-        StreamResponse::Live(
-            EventStream::new(events)
-                .keep_alive(KEEP_ALIVE)
-                .to_event(|event| {
-                    let id = event.event_id.clone();
-                    Event::message(event.to_json_string())
-                        .id(id)
-                        .event_type(STREAM_EVENT)
-                }),
-        )
-    }
-
-    #[oai(path = "/usage/totals", method = "get", operation_id = "usage_totals")]
-    async fn usage_totals(
-        &self,
-        from: Query<Option<String>>,
-        to: Query<Option<String>>,
-        source_id: Query<Option<String>>,
-    ) -> TotalsResponse {
-        let query = Filter {
-            from: from.0,
-            to: to.0,
-            source_id: source_id.0,
-            model: None,
-            account_id: None,
-            failed: None,
-        };
-        let filter = match UsageFilter::try_from(query) {
-            Ok(filter) => filter,
-            Err(error) => return TotalsResponse::Invalid(Json(error)),
-        };
-
-        match UsageEvent::totals(&self.state.database, &filter).await {
-            Ok(totals) => TotalsResponse::Found(Json(totals.into())),
-            Err(error) => TotalsResponse::Failed(Json(failure("usage_totals", &error))),
-        }
-    }
-
-    #[oai(path = "/usage/series", method = "get", operation_id = "usage_series")]
-    async fn usage_series(
-        &self,
-        from: Query<Option<String>>,
-        to: Query<Option<String>>,
-        bucket: Query<Option<BucketInput>>,
-        group_by: Query<Option<GroupingInput>>,
-        source_id: Query<Option<String>>,
-    ) -> SeriesResponse {
-        let query = Filter {
-            from: from.0,
-            to: to.0,
-            source_id: source_id.0,
-            model: None,
-            account_id: None,
-            failed: None,
-        };
-        let filter = match UsageFilter::try_from(query) {
-            Ok(filter) => filter,
-            Err(error) => return SeriesResponse::Invalid(Json(error)),
-        };
-        let bucket = bucket.0.unwrap_or(BucketInput::Hour).into();
-        let grouping = group_by.0.unwrap_or(GroupingInput::Model).into();
-
-        match UsageEvent::series(&self.state.database, &filter, bucket, grouping).await {
-            Ok(buckets) => SeriesResponse::Found(Json(SeriesList {
-                buckets: buckets.into_iter().map(SeriesBucketOutput::from).collect(),
-            })),
-            Err(error) => SeriesResponse::Failed(Json(failure("usage_series", &error))),
-        }
+        StreamResponse::Live(EventStream::new(messages).keep_alive(KEEP_ALIVE).to_event(
+            |message| {
+                match message {
+                    StreamMessage::Usage(event) => Event::message(event.to_json_string())
+                        .id(event.event_id.clone())
+                        .event_type(USAGE_EVENT),
+                    StreamMessage::Priced(priced) => {
+                        Event::message(priced.to_json_string()).event_type(PRICED_EVENT)
+                    }
+                }
+            },
+        ))
     }
 }
 
@@ -335,116 +284,40 @@ struct EventPage {
     next_before: Option<String>,
 }
 
-#[derive(Debug, Object)]
-#[oai(rename = "Totals")]
-struct TotalsOutput {
-    requests: i64,
-    failures: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    reasoning_tokens: i64,
-    cache_read_tokens: i64,
-    cache_write_tokens: i64,
-    unclassified_tokens: i64,
-    total_tokens: i64,
-    list_cost_usd: f64,
-    billed_cost_usd: f64,
-    /// Events no price has been found for yet, left out of `list_cost_usd`.
-    unpriced: i64,
-    models: i64,
-    accounts: i64,
+/// One Server-Sent Event of the usage stream; its SSE type says which.
+#[derive(Debug, Union)]
+#[oai(rename = "UsageStreamMessage", one_of)]
+enum StreamMessage {
+    Usage(Box<UsageEventOutput>),
+    Priced(PricedEventOutput),
 }
 
-impl From<Totals> for TotalsOutput {
-    fn from(totals: Totals) -> Self {
-        Self {
-            requests: totals.requests,
-            failures: totals.failures,
-            input_tokens: totals.input_tokens,
-            output_tokens: totals.output_tokens,
-            reasoning_tokens: totals.reasoning_tokens,
-            cache_read_tokens: totals.cache_read_tokens,
-            cache_write_tokens: totals.cache_write_tokens,
-            unclassified_tokens: totals.unclassified_tokens,
-            total_tokens: totals.total_tokens,
-            list_cost_usd: totals.list_cost_usd,
-            billed_cost_usd: totals.billed_cost_usd,
-            unpriced: totals.unpriced,
-            models: totals.models,
-            accounts: totals.accounts,
+impl From<UsageUpdate> for StreamMessage {
+    fn from(update: UsageUpdate) -> Self {
+        match update {
+            UsageUpdate::Recorded(event) => Self::Usage(Box::new((*event).into())),
+            UsageUpdate::Priced(priced) => Self::Priced(priced.into()),
         }
     }
 }
 
+/// The cost a price fill committed for an event already sent.
 #[derive(Debug, Object)]
-#[oai(rename = "SeriesBucket")]
-struct SeriesBucketOutput {
-    start: String,
-    key: String,
-    requests: i64,
-    failures: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    total_tokens: i64,
+#[oai(rename = "PricedEvent")]
+struct PricedEventOutput {
+    event_id: String,
+    price_id: String,
     list_cost_usd: f64,
     billed_cost_usd: f64,
 }
 
-impl From<SeriesBucket> for SeriesBucketOutput {
-    fn from(bucket: SeriesBucket) -> Self {
+impl From<PricedEvent> for PricedEventOutput {
+    fn from(priced: PricedEvent) -> Self {
         Self {
-            start: bucket.start.to_string(),
-            key: bucket.key,
-            requests: bucket.requests,
-            failures: bucket.failures,
-            input_tokens: bucket.input_tokens,
-            output_tokens: bucket.output_tokens,
-            total_tokens: bucket.total_tokens,
-            list_cost_usd: bucket.list_cost_usd,
-            billed_cost_usd: bucket.billed_cost_usd,
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-struct SeriesList {
-    buckets: Vec<SeriesBucketOutput>,
-}
-
-#[derive(Debug, Clone, Copy, Enum)]
-#[oai(rename = "Bucket", rename_all = "snake_case")]
-enum BucketInput {
-    Hour,
-    Day,
-}
-
-impl From<BucketInput> for Bucket {
-    fn from(bucket: BucketInput) -> Self {
-        match bucket {
-            BucketInput::Hour => Self::Hour,
-            BucketInput::Day => Self::Day,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Enum)]
-#[oai(rename = "Grouping", rename_all = "snake_case")]
-enum GroupingInput {
-    Model,
-    Provider,
-    Account,
-    Harness,
-    Source,
-}
-
-impl From<GroupingInput> for Grouping {
-    fn from(grouping: GroupingInput) -> Self {
-        match grouping {
-            GroupingInput::Model => Self::Model,
-            GroupingInput::Provider => Self::Provider,
-            GroupingInput::Account => Self::Account,
-            GroupingInput::Harness => Self::Harness,
-            GroupingInput::Source => Self::Source,
+            event_id: priced.event_id.encode(),
+            price_id: priced.price_id.encode(),
+            list_cost_usd: priced.list_cost_usd,
+            billed_cost_usd: priced.billed_cost_usd,
         }
     }
 }
@@ -462,27 +335,7 @@ enum EventPageResponse {
 #[derive(ApiResponse)]
 enum StreamResponse {
     #[oai(status = 200)]
-    Live(EventStream<BoxStream<'static, UsageEventOutput>>),
-    #[oai(status = 400)]
-    Invalid(Json<Error>),
-    #[oai(status = 500)]
-    Failed(Json<Error>),
-}
-
-#[derive(ApiResponse)]
-enum TotalsResponse {
-    #[oai(status = 200)]
-    Found(Json<TotalsOutput>),
-    #[oai(status = 400)]
-    Invalid(Json<Error>),
-    #[oai(status = 500)]
-    Failed(Json<Error>),
-}
-
-#[derive(ApiResponse)]
-enum SeriesResponse {
-    #[oai(status = 200)]
-    Found(Json<SeriesList>),
+    Live(EventStream<BoxStream<'static, StreamMessage>>),
     #[oai(status = 400)]
     Invalid(Json<Error>),
     #[oai(status = 500)]
@@ -498,18 +351,19 @@ fn event_id(value: Option<&str>, name: &'static str) -> Result<Option<Id<UsageEv
         })
 }
 
-/// Committed events as they are published, without any the replay already sent. A
-/// receiver that lagged has lost events it cannot name, so the stream ends there rather
-/// than skip them.
+/// Committed updates as they are published, without any event the replay already sent.
+/// A receiver that lagged has lost updates it cannot name, so the stream ends there
+/// rather than skip them.
 fn live(
-    receiver: broadcast::Receiver<UsageEvent>,
+    receiver: broadcast::Receiver<UsageUpdate>,
     replayed_through: Option<Id<UsageEvent>>,
-) -> BoxStream<'static, UsageEvent> {
+) -> BoxStream<'static, UsageUpdate> {
     stream::unfold(receiver, move |mut receiver| async move {
         loop {
             match receiver.recv().await {
-                Ok(event) if replayed_through.is_some_and(|through| event.id <= through) => {}
-                Ok(event) => return Some((event, receiver)),
+                Ok(UsageUpdate::Recorded(event))
+                    if replayed_through.is_some_and(|through| event.id <= through) => {}
+                Ok(update) => return Some((update, receiver)),
                 Err(_) => return None,
             }
         }

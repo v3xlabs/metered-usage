@@ -1,5 +1,3 @@
-import type { Bucket } from "../api/usage";
-
 const COMPACT = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
 const EXACT = new Intl.NumberFormat();
 const MOMENT = new Intl.DateTimeFormat(undefined, {
@@ -9,8 +7,6 @@ const MOMENT = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
   second: "2-digit",
 });
-const HOUR_TICK = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
-const DAY_TICK = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 const UTC_DAY = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" });
 const USD = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
 const USD_FINE = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 4 });
@@ -39,9 +35,6 @@ export const formatOptionalMoment = (timestamp: string | undefined, absent: stri
   (timestamp === undefined ? absent : MOMENT.format(new Date(timestamp)));
 
 export const formatUtcDay = (timestamp: string): string => UTC_DAY.format(new Date(timestamp));
-
-export const formatBucketStart = (start: string, bucket: Bucket): string =>
-  (bucket === "hour" ? HOUR_TICK : DAY_TICK).format(new Date(start));
 
 export const formatLatency = (milliseconds: number | undefined): string => {
   if (milliseconds === undefined) return "-";

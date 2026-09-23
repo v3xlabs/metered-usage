@@ -18,6 +18,7 @@ use crate::account::{Account, AccountSummary, NewAccount};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
+use crate::price::ModelPrice;
 use crate::source::Source;
 
 /// The account summary reads `provider` as the account's, which can differ from the
@@ -132,85 +133,6 @@ impl UsageEvent {
             .fetch_all(&database.pool)
             .await?)
     }
-
-    pub async fn totals(
-        database: &Database,
-        filter: &UsageFilter,
-    ) -> Result<Totals, DatabaseError> {
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT COUNT(*) AS requests, \
-             COALESCE(SUM(failed), 0) AS failures, \
-             COALESCE(SUM(input_tokens), 0) AS input_tokens, \
-             COALESCE(SUM(output_tokens), 0) AS output_tokens, \
-             COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens, \
-             COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens, \
-             COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens, \
-             COALESCE(SUM(unclassified_tokens), 0) AS unclassified_tokens, \
-             COALESCE(SUM(total_tokens), 0) AS total_tokens, \
-             COALESCE(SUM(list_cost_usd), 0.0) AS list_cost_usd, \
-             COALESCE(SUM(billed_cost_usd), 0.0) AS billed_cost_usd, \
-             COUNT(*) - COUNT(list_cost_usd) AS unpriced, \
-             COUNT(DISTINCT model) AS models, \
-             COUNT(DISTINCT account_id) AS accounts \
-             FROM usage_event",
-        );
-        filter.push_to(&mut builder);
-
-        Ok(builder
-            .build_query_as::<Totals>()
-            .fetch_one(&database.pool)
-            .await?)
-    }
-
-    pub async fn series(
-        database: &Database,
-        filter: &UsageFilter,
-        bucket: Bucket,
-        grouping: Grouping,
-    ) -> Result<Vec<SeriesBucket>, DatabaseError> {
-        let width = bucket.prefix_width();
-        let key = grouping.expression();
-        let mut builder = QueryBuilder::<Sqlite>::new(format!(
-            "SELECT substr(occurred_at, 1, {width}) AS bucket_start, {key} AS group_key, \
-             COUNT(*) AS requests, \
-             COALESCE(SUM(failed), 0) AS failures, \
-             COALESCE(SUM(input_tokens), 0) AS input_tokens, \
-             COALESCE(SUM(output_tokens), 0) AS output_tokens, \
-             COALESCE(SUM(total_tokens), 0) AS total_tokens, \
-             COALESCE(SUM(list_cost_usd), 0.0) AS list_cost_usd, \
-             COALESCE(SUM(billed_cost_usd), 0.0) AS billed_cost_usd \
-             FROM usage_event"
-        ));
-        filter.push_to(&mut builder);
-        builder.push(" GROUP BY bucket_start, group_key ORDER BY bucket_start, group_key");
-        let rows = builder
-            .build_query_as::<SeriesRow>()
-            .fetch_all(&database.pool)
-            .await?;
-
-        rows.into_iter()
-            .map(|row| {
-                let start = bucket.start_of(&row.bucket_start)?;
-                let key = match grouping {
-                    Grouping::Source => encoded::<Source>(row.group_key, "source_id")?,
-                    Grouping::Account => encoded::<Account>(row.group_key, "account_id")?,
-                    Grouping::Model | Grouping::Provider | Grouping::Harness => row.group_key,
-                };
-
-                Ok(SeriesBucket {
-                    start,
-                    key,
-                    requests: row.requests,
-                    failures: row.failures,
-                    input_tokens: row.input_tokens,
-                    output_tokens: row.output_tokens,
-                    total_tokens: row.total_tokens,
-                    list_cost_usd: row.list_cost_usd,
-                    billed_cost_usd: row.billed_cost_usd,
-                })
-            })
-            .collect()
-    }
 }
 
 /// Where a page starts, as the id of an event the client already has.
@@ -218,6 +140,23 @@ impl UsageEvent {
 pub enum Cursor {
     Before(Id<UsageEvent>),
     After(Id<UsageEvent>),
+}
+
+/// What the live usage stream carries: an event as ingest committed it, or the cost a
+/// later price fill committed for one.
+#[derive(Debug, Clone)]
+pub enum UsageUpdate {
+    Recorded(Box<UsageEvent>),
+    Priced(PricedEvent),
+}
+
+/// The cost a fill froze onto an event.
+#[derive(Debug, Clone, Copy, FromRow)]
+pub struct PricedEvent {
+    pub event_id: Id<UsageEvent>,
+    pub price_id: Id<ModelPrice>,
+    pub list_cost_usd: f64,
+    pub billed_cost_usd: f64,
 }
 
 /// A record as the gateway described it, before this service gave it an identity.
@@ -365,106 +304,4 @@ impl UsageFilter {
             builder.push(" AND usage_event.failed = ").push_bind(failed);
         }
     }
-}
-
-#[derive(Debug, FromRow)]
-pub struct Totals {
-    pub requests: i64,
-    pub failures: i64,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub reasoning_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_write_tokens: i64,
-    pub unclassified_tokens: i64,
-    pub total_tokens: i64,
-    pub list_cost_usd: f64,
-    pub billed_cost_usd: f64,
-    /// Events no price has been found for yet.
-    pub unpriced: i64,
-    pub models: i64,
-    pub accounts: i64,
-}
-
-#[derive(Debug)]
-pub struct SeriesBucket {
-    pub start: Timestamp,
-    pub key: String,
-    pub requests: i64,
-    pub failures: i64,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub total_tokens: i64,
-    pub list_cost_usd: f64,
-    pub billed_cost_usd: f64,
-}
-
-#[derive(Debug, FromRow)]
-struct SeriesRow {
-    bucket_start: String,
-    group_key: String,
-    requests: i64,
-    failures: i64,
-    input_tokens: i64,
-    output_tokens: i64,
-    total_tokens: i64,
-    list_cost_usd: f64,
-    billed_cost_usd: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bucket {
-    Hour,
-    Day,
-}
-
-impl Bucket {
-    /// How much of the stored spelling names the bucket: `2026-09-18T01` or `2026-09-18`.
-    fn prefix_width(self) -> usize {
-        match self {
-            Self::Hour => 13,
-            Self::Day => 10,
-        }
-    }
-
-    fn start_of(self, prefix: &str) -> Result<Timestamp, DatabaseError> {
-        let text = match self {
-            Self::Hour => format!("{prefix}:00:00.000000000Z"),
-            Self::Day => format!("{prefix}T00:00:00.000000000Z"),
-        };
-
-        text.parse().map_err(|_| DatabaseError::Unreadable {
-            field: "occurred_at",
-            value: prefix.to_owned(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Grouping {
-    Model,
-    Provider,
-    Account,
-    Harness,
-    Source,
-}
-
-impl Grouping {
-    /// Every arm is a literal of this crate, never request text. The row reads one text
-    /// column whatever the grouping is.
-    fn expression(self) -> &'static str {
-        match self {
-            Self::Model => "model",
-            Self::Provider => "provider",
-            Self::Account => "CAST(account_id AS TEXT)",
-            Self::Harness => "COALESCE(harness, '')",
-            Self::Source => "CAST(source_id AS TEXT)",
-        }
-    }
-}
-
-fn encoded<T>(key: String, field: &'static str) -> Result<String, DatabaseError> {
-    key.parse::<i64>()
-        .map(|raw| Id::<T>::from_raw(raw).encode())
-        .map_err(|_| DatabaseError::Unreadable { field, value: key })
 }

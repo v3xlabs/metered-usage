@@ -5,10 +5,6 @@ import type { Shape } from "./shape";
 import { hasShape } from "./shape";
 
 export type UsageEvent = components["schemas"]["UsageEvent"];
-export type Totals = components["schemas"]["Totals"];
-export type SeriesBucket = components["schemas"]["SeriesBucket"];
-export type Bucket = components["schemas"]["Bucket"];
-export type Grouping = components["schemas"]["Grouping"];
 export type EventPage = components["schemas"]["EventPage"];
 export type TokenQuality = NonNullable<UsageEvent["token_quality"]>;
 
@@ -61,7 +57,7 @@ const USAGE_EVENT_SHAPE: Shape<UsageEvent> = {
   billed_cost_usd: { optional: "number" },
 };
 
-export const parseUsageEvent = (data: string): UsageEvent | undefined => {
+const parseShaped = <Target>(shape: Shape<Target>, data: string): Target | undefined => {
   let value: unknown;
 
   try {
@@ -71,40 +67,21 @@ export const parseUsageEvent = (data: string): UsageEvent | undefined => {
     return undefined;
   }
 
-  return hasShape<UsageEvent>(USAGE_EVENT_SHAPE, value) ? value : undefined;
+  return hasShape<Target>(shape, value) ? value : undefined;
 };
 
-export const fetchTotals = async (usageWindow: UsageWindow): Promise<Totals> => {
-  const response = await api("/usage/totals", "get", {
-    query: {
-      from: usageWindow.from,
-      ...(usageWindow.to !== undefined && { to: usageWindow.to }),
-      ...(usageWindow.sourceId !== undefined && { source_id: usageWindow.sourceId }),
-    },
-  });
+export const parseUsageEvent = (data: string): UsageEvent | undefined => parseShaped(USAGE_EVENT_SHAPE, data);
 
-  if (response.status === 200) return response.data;
+export type PricedEvent = components["schemas"]["PricedEvent"];
 
-  throw new Error(`Totals request failed with status ${response.status}.`);
+const PRICED_EVENT_SHAPE: Shape<PricedEvent> = {
+  event_id: "string",
+  list_cost_usd: "number",
+  billed_cost_usd: "number",
+  price_id: "string",
 };
 
-export const fetchSeries = async (
-  usageWindow: UsageWindow & { bucket: Bucket; groupBy: Grouping; },
-): Promise<readonly SeriesBucket[]> => {
-  const response = await api("/usage/series", "get", {
-    query: {
-      from: usageWindow.from,
-      bucket: usageWindow.bucket,
-      group_by: usageWindow.groupBy,
-      ...(usageWindow.to !== undefined && { to: usageWindow.to }),
-      ...(usageWindow.sourceId !== undefined && { source_id: usageWindow.sourceId }),
-    },
-  });
-
-  if (response.status === 200) return response.data.buckets;
-
-  throw new Error(`Series request failed with status ${response.status}.`);
-};
+export const parsePricedEvent = (data: string): PricedEvent | undefined => parseShaped(PRICED_EVENT_SHAPE, data);
 
 export const fetchEvents = async (filter: EventFilter): Promise<EventPage> => {
   const response = await api("/usage/events", "get", {

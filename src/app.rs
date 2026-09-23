@@ -3,7 +3,7 @@ use tokio::sync::broadcast;
 use crate::config::Config;
 use crate::database::Database;
 use crate::http::auth::Token;
-use crate::usage::UsageEvent;
+use crate::usage::UsageUpdate;
 
 /// How many committed events a slow stream subscriber may fall behind before it is cut
 /// off and left to catch up from the database on reconnect.
@@ -14,8 +14,9 @@ pub struct AppState {
     pub database: Database,
     pub token: Token,
     pub config: Config,
-    /// Every event ingest committed, in commit order per batch.
-    pub usage: broadcast::Sender<UsageEvent>,
+    /// Every event ingest committed, in commit order per batch, and every cost a price
+    /// fill committed afterwards.
+    pub usage: broadcast::Sender<UsageUpdate>,
     /// Shared by every outbound call so connections are pooled.
     pub http: reqwest::Client,
 }

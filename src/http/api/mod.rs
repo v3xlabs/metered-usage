@@ -1,6 +1,7 @@
 //! The HTTP surface, one module per resource.
 
 pub mod account;
+pub mod analytics;
 pub mod dead_letter;
 pub mod health;
 pub mod leverage;

@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use futures_util::StreamExt;
 use jiff::Timestamp;
 use metered_usage::account::{AuthKind, NewAccount};
 use metered_usage::app::AppState;
@@ -127,7 +129,7 @@ impl<E: Endpoint> Harness<E> {
     }
 
     async fn fill(&self) -> Result<(), Failure> {
-        ModelPrice::fill(&self.state.database).await?;
+        ModelPrice::fill(&self.state).await?;
         Ok(())
     }
 
@@ -661,6 +663,78 @@ async fn leverage_is_counted_per_billing_period() -> Result<(), Failure> {
     assert_eq!(february.requests, 1);
     close(Some(february.list_cost_usd), 0.3);
     close(february.leverage, 1.5);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_open_stream_learns_the_cost_of_an_event_priced_after_it_was_sent() -> Result<(), Failure>
+{
+    let harness = harness().await?;
+    let stream = harness.client.get("/api/usage/stream").send().await;
+    stream.assert_status_is_ok();
+    let mut body = stream.0.into_body().into_bytes_stream();
+
+    harness
+        .store(
+            "proxy",
+            vec![request("late", at("2025-06-01T00:00:00Z")?, 1000, 1000)],
+        )
+        .await?;
+    let manual = harness
+        .manual(&json!({
+            "model": SONNET,
+            "effective_from": "2025-01-01T00:00:00Z",
+            "input_usd_per_mtok": 1.0,
+            "cached_input_usd_per_mtok": 0.1,
+            "cache_write_usd_per_mtok": 1.25,
+            "output_usd_per_mtok": 5.0,
+        }))
+        .await?;
+    harness.fill().await?;
+
+    let mut text = String::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while text.matches("\n\n").count() < 2 {
+            let chunk = body
+                .next()
+                .await
+                .ok_or("the stream ended")?
+                .map_err(|error| error.to_string())?;
+            text.push_str(std::str::from_utf8(&chunk).map_err(|error| error.to_string())?);
+        }
+        Ok::<_, String>(())
+    })
+    .await??;
+
+    let messages = text
+        .split("\n\n")
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    let field = |message: &str, name: &str| {
+        message
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::to_owned)
+    };
+    let [usage, priced] = messages.as_slice() else {
+        return Err(format!("a usage and a priced message, found {text:?}").into());
+    };
+    assert_eq!(field(usage, "event: ").as_deref(), Some("usage"));
+    let usage = serde_json::from_str::<Value>(&field(usage, "data: ").ok_or("usage data")?)?;
+    assert_eq!(usage["list_cost_usd"], Value::Null, "sent before any price");
+
+    assert_eq!(field(priced, "event: ").as_deref(), Some("priced"));
+    assert_eq!(
+        field(priced, "id: "),
+        None,
+        "Last-Event-ID keeps naming usage events"
+    );
+    let priced = serde_json::from_str::<Value>(&field(priced, "data: ").ok_or("priced data")?)?;
+    assert_eq!(priced["event_id"], usage["event_id"]);
+    assert_eq!(priced["price_id"], json!(manual.id));
+    close(priced["list_cost_usd"].as_f64(), 0.006);
+    close(priced["billed_cost_usd"].as_f64(), 0.0);
 
     Ok(())
 }

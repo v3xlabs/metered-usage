@@ -243,7 +243,7 @@ pub fn spawn(state: Arc<AppState>) {
         ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             ticks.tick().await;
-            if let Err(error) = ModelPrice::fill(&state.database).await {
+            if let Err(error) = ModelPrice::fill(&state).await {
                 tracing::error!(%error, "pricing events failed");
             }
         }

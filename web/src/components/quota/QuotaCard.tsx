@@ -1,65 +1,114 @@
-import { createSignal, For, Show } from "solid-js";
+import { TbOutlineCreditCard, TbOutlineRefresh } from "solid-icons/tb";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import type { QuotaAccount, QuotaWindow } from "../../api/quota";
 import { refreshQuota } from "../../api/quota";
+import { accountDescription, accountLabel, isUnlabelled } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
-import { barPercent, formatAge, formatCountdown, formatWindowAmount } from "../../domain/quota";
-import { AccountName } from "../AccountName";
+import type { QuotaLevel } from "../../domain/quota";
+import { formatAge, formatCountdown, formatWindowAmount, isBehind, quotaLevel, remainingPercent } from "../../domain/quota";
+import { AuthKindIcon } from "../AccountName";
+import { IconButton } from "../IconButton";
+import { ProviderIcon } from "../ProviderIcon";
 
-const BADGE = "rounded-control px-1.5 py-px text-[11px] font-medium";
-const NEUTRAL_BADGE = `${BADGE} bg-raised text-slate-600 dark:text-slate-300`;
-const WARNING_BADGE = `${BADGE} bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300`;
-const DANGER_BADGE = `${BADGE} bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300`;
-const HIGH_USE = 0.9;
-const RAISED_USE = 0.7;
-
-const barColor = (fraction: number): string => {
-  if (fraction >= HIGH_USE) return "bg-red-500";
-
-  if (fraction >= RAISED_USE) return "bg-amber-500";
-
-  return "bg-blue-500";
+const LEVEL_TONES: Record<QuotaLevel, { fill: string; text: string; }> = {
+  comfortable: { fill: "bg-emerald-500", text: "text-slate-900 dark:text-slate-100" },
+  low: { fill: "bg-amber-500", text: "text-amber-700 dark:text-amber-400" },
+  exhausted: { fill: "bg-red-500", text: "text-red-600 dark:text-red-400" },
 };
 
-const WindowBar = (properties: { window: QuotaWindow; nowMs: number; }) => (
-  <li class="space-y-1">
-    <div class="flex items-baseline justify-between gap-2 text-xs">
-      <span class="truncate text-slate-700 dark:text-slate-300">{properties.window.label}</span>
-      <span class="font-medium text-slate-900 tabular-nums dark:text-slate-100">
-        {properties.window.used_fraction === undefined ? "-" : `${Math.round(barPercent(properties.window.used_fraction))}%`}
-      </span>
-    </div>
-    <div
-      role="meter"
-      aria-label={`${properties.window.label} used`}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={properties.window.used_fraction === undefined ? undefined : barPercent(properties.window.used_fraction)}
-      class="h-1.5 overflow-hidden rounded-full bg-raised"
-    >
-      <Show when={properties.window.used_fraction}>
-        {fraction => (
-          <div class={["h-full rounded-full", barColor(fraction())]} style={{ width: `${barPercent(fraction())}%` }} />
-        )}
-      </Show>
-    </div>
-    <div class="flex flex-wrap justify-between gap-x-2 text-xs text-slate-500 tabular-nums dark:text-slate-500">
-      <span>{formatWindowAmount(properties.window) ?? ""}</span>
-      <Show when={properties.window.resets_at}>
-        {resetsAt => <span title={formatMoment(resetsAt())}>{`Resets ${formatCountdown(resetsAt(), properties.nowMs)}`}</span>}
-      </Show>
-    </div>
-  </li>
+const StatusMark = (properties: { tone: "neutral" | "warning" | "danger"; text: string; }) => (
+  <span
+    class={[
+      "flex items-center gap-1.5",
+      {
+        "text-slate-600 dark:text-slate-400": properties.tone === "neutral",
+        "font-medium text-amber-700 dark:text-amber-400": properties.tone === "warning",
+        "font-medium text-red-600 dark:text-red-400": properties.tone === "danger",
+      },
+    ]}
+  >
+    <span
+      aria-hidden="true"
+      class={[
+        "size-1.5 shrink-0 rounded-full",
+        {
+          "bg-slate-400 dark:bg-slate-500": properties.tone === "neutral",
+          "bg-amber-500": properties.tone === "warning",
+          "bg-red-500": properties.tone === "danger",
+        },
+      ]}
+    />
+    {properties.text}
+  </span>
+);
+
+const WindowText = (properties: { window: QuotaWindow; nowMs: number; }) => (
+  <div class="flex flex-wrap justify-between gap-x-2 text-xs text-slate-500 tabular-nums dark:text-slate-500">
+    <Show when={formatWindowAmount(properties.window)} fallback={<span />}>
+      {amount => <span>{`${amount()} used`}</span>}
+    </Show>
+    <Show when={properties.window.resets_at}>
+      {resetsAt => <span title={formatMoment(resetsAt())}>{`Resets ${formatCountdown(resetsAt(), properties.nowMs)}`}</span>}
+    </Show>
+  </div>
+);
+
+const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; nowMs: number; }) => {
+  const percentLeft = createMemo(() => remainingPercent(properties.usedFraction));
+  const tone = createMemo(() => LEVEL_TONES[quotaLevel(percentLeft())]);
+
+  return (
+    <li class="space-y-1">
+      <div class="flex items-baseline justify-between gap-2 text-xs">
+        <span class="truncate text-slate-700 dark:text-slate-300">{properties.window.label}</span>
+        <span class={["shrink-0 font-medium tabular-nums", tone().text]}>{`${Math.round(percentLeft())}% left`}</span>
+      </div>
+      <div
+        role="meter"
+        aria-label={`${properties.window.label} remaining`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percentLeft()}
+        aria-valuetext={`${Math.round(percentLeft())}% left`}
+        class="h-1.5 overflow-hidden rounded-full bg-raised"
+      >
+        <div class={["h-full rounded-full", tone().fill]} style={{ width: `${percentLeft()}%` }} />
+      </div>
+      <WindowText window={properties.window} nowMs={properties.nowMs} />
+    </li>
+  );
+};
+
+// A window that has used nothing reports a fraction of zero, which must still draw a full bar.
+const WindowRow = (properties: { window: QuotaWindow; nowMs: number; }) => (
+  <Show
+    when={properties.window.used_fraction === undefined ? undefined : { usedFraction: properties.window.used_fraction }}
+    fallback={(
+      <li class="space-y-1">
+        <p class="truncate text-xs text-slate-700 dark:text-slate-300">{properties.window.label}</p>
+        <WindowText window={properties.window} nowMs={properties.nowMs} />
+      </li>
+    )}
+  >
+    {measured => <WindowMeter window={properties.window} usedFraction={measured().usedFraction} nowMs={properties.nowMs} />}
+  </Show>
 );
 
 export const QuotaCard = (properties: {
   entry: QuotaAccount;
   nowMs: number;
+  latestSoft: string | undefined;
+  latestHard: string | undefined;
   isRefreshBlocked: boolean;
   onAccounts: (accounts: readonly QuotaAccount[]) => void;
 }) => {
   const [isRefreshing, setIsRefreshing] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
+  const isSoftBehind = createMemo(() => isBehind(properties.entry.soft_observed_at, properties.latestSoft));
+  const isHardBehind = createMemo(() =>
+    properties.entry.hard_refresh_error !== undefined
+    || (properties.entry.hard_refreshable && isBehind(properties.entry.hard_refreshed_at, properties.latestHard)));
 
   const refresh = async (): Promise<void> => {
     setIsRefreshing(true);
@@ -79,41 +128,61 @@ export const QuotaCard = (properties: {
   };
 
   return (
-    <li class="flex flex-col gap-3 rounded-panel bg-surface p-4">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0 space-y-1.5 text-sm">
-          <AccountName account={properties.entry.account} />
-          <div class="flex flex-wrap gap-1.5">
-            <Show when={properties.entry.status}>
-              {status => <span class={NEUTRAL_BADGE}>{status()}</span>}
-            </Show>
-            <Show when={properties.entry.disabled}>
-              <span class={DANGER_BADGE}>Disabled</span>
-            </Show>
-            <Show when={properties.entry.unavailable}>
-              <span class={WARNING_BADGE}>Unavailable</span>
-            </Show>
-            <Show when={properties.entry.plan}>
-              {plan => <span class={NEUTRAL_BADGE}>{`Plan ${plan()}`}</span>}
-            </Show>
-            <Show when={properties.entry.account_type}>
-              {accountType => <span class={NEUTRAL_BADGE}>{accountType()}</span>}
-            </Show>
-          </div>
-        </div>
-        <Show when={properties.entry.hard_refreshable}>
-          <button
-            type="button"
-            disabled={isRefreshing() || properties.isRefreshBlocked}
-            onClick={() => void refresh()}
-            class="shrink-0 rounded-control bg-raised px-2.5 py-1 text-xs text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300"
+    <li class="flex min-w-0 flex-col gap-3 rounded-panel bg-surface p-4">
+      <div class="space-y-1.5">
+        <div class="flex items-center gap-2">
+          <ProviderIcon provider={properties.entry.account.provider} class="size-5 text-slate-700 dark:text-slate-200" />
+          <h4
+            title={accountDescription(properties.entry.account)}
+            class={[
+              "min-w-0 flex-1 truncate text-sm",
+              isUnlabelled(properties.entry.account)
+                ? "text-slate-500 italic dark:text-slate-500"
+                : "font-semibold text-slate-900 dark:text-slate-100",
+            ]}
           >
-            {isRefreshing() ? "Refreshing" : "Refresh"}
-          </button>
-        </Show>
+            {accountLabel(properties.entry.account)}
+          </h4>
+          <AuthKindIcon authKind={properties.entry.account.auth_kind} />
+          <Show when={properties.entry.hard_refreshable}>
+            <span class="-my-1 flex">
+              <IconButton
+                label={`Refresh ${accountLabel(properties.entry.account)} from the provider`}
+                tooltip={isRefreshing() ? "Refreshing from the provider" : "Refresh from the provider"}
+                isPending={isRefreshing()}
+                isDisabled={isRefreshing() || properties.isRefreshBlocked}
+                onClick={() => void refresh()}
+              >
+                <TbOutlineRefresh size={16} />
+              </IconButton>
+            </span>
+          </Show>
+        </div>
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <Show when={properties.entry.plan}>
+            {plan => (
+              <span class="flex min-w-0 items-center gap-1 text-slate-900 dark:text-slate-100">
+                <span class="flex shrink-0 text-slate-500 dark:text-slate-400">
+                  <TbOutlineCreditCard size={14} aria-hidden="true" />
+                </span>
+                <span class="sr-only">Plan</span>
+                <span class="truncate font-semibold">{plan()}</span>
+              </span>
+            )}
+          </Show>
+          <Show when={properties.entry.disabled}>
+            <StatusMark tone="danger" text="Disabled" />
+          </Show>
+          <Show when={properties.entry.unavailable}>
+            <StatusMark tone="warning" text="Unavailable" />
+          </Show>
+          <Show when={properties.entry.status}>
+            {status => <StatusMark tone="neutral" text={status()} />}
+          </Show>
+        </div>
       </div>
       <Show when={properties.entry.status_message}>
-        {message => <p class="text-xs text-slate-600 dark:text-slate-400">{message()}</p>}
+        {message => <p class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">{message()}</p>}
       </Show>
       <Show
         when={properties.entry.windows.length > 0}
@@ -121,7 +190,7 @@ export const QuotaCard = (properties: {
       >
         <ul class="space-y-2.5">
           <For each={properties.entry.windows}>
-            {window => <WindowBar window={window} nowMs={properties.nowMs} />}
+            {window => <WindowRow window={window} nowMs={properties.nowMs} />}
           </For>
         </ul>
       </Show>
@@ -151,17 +220,23 @@ export const QuotaCard = (properties: {
           </p>
         )}
       </Show>
-      <dl class="mt-auto grid grid-cols-[auto_1fr] gap-x-2 text-xs text-slate-500 tabular-nums dark:text-slate-500">
-        <dt>Soft data</dt>
-        <dd>{formatAge(properties.entry.soft_observed_at, properties.nowMs)}</dd>
-        <dt>Hard refresh</dt>
-        <dd>{formatAge(properties.entry.hard_refreshed_at, properties.nowMs)}</dd>
-      </dl>
+      <Show when={isSoftBehind() || isHardBehind()}>
+        <dl class="mt-auto grid grid-cols-[auto_1fr] gap-x-2 text-xs text-amber-700 tabular-nums dark:text-amber-400">
+          <Show when={isSoftBehind()}>
+            <dt>Soft data</dt>
+            <dd>{formatAge(properties.entry.soft_observed_at, properties.nowMs)}</dd>
+          </Show>
+          <Show when={isHardBehind()}>
+            <dt>Hard refresh</dt>
+            <dd>{formatAge(properties.entry.hard_refreshed_at, properties.nowMs)}</dd>
+          </Show>
+        </dl>
+      </Show>
       <Show when={properties.entry.hard_refresh_error}>
-        {error => <p class="text-xs text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}
+        {error => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}
       </Show>
       <Show when={failure()}>
-        {message => <p class="text-xs text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400" role="alert">{message()}</p>}
       </Show>
     </li>
   );

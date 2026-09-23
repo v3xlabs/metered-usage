@@ -3,6 +3,6 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 source-item-ordering = ["module"]
 doc-valid-idents = ["CLIProxy", "CLIProxyAPI", "LiteLLM", "OpenRouter", ".."]
-# The event listing answers nine query parameters named by the API contract, and
-# poem-openapi takes each one as its own handler argument.
-too-many-arguments-threshold = 10
+# The event listing and the analytics series answer the query parameters named by the API
+# contract, and poem-openapi takes each one as its own handler argument.
+too-many-arguments-threshold = 13

@@ -1,8 +1,11 @@
+import { TbOutlineCloudDownload, TbOutlineRefresh } from "solid-icons/tb";
 import { createMemo, createSignal, Errored, For, Loading, onCleanup, Show } from "solid-js";
 
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
-import { groupBySource } from "../../domain/quota";
+import { groupBySource } from "../../domain/account";
+import { formatAge, latestMoment } from "../../domain/quota";
+import { IconButton } from "../IconButton";
 import { RegionFailure, RegionPending } from "../Region";
 import { QuotaCard } from "./QuotaCard";
 
@@ -11,13 +14,16 @@ import { QuotaCard } from "./QuotaCard";
 const REREAD_INTERVAL_MS = 60_000;
 const CLOCK_INTERVAL_MS = 1000;
 
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
+const AGE_TEXT = "text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400";
 
 type Notice = { tone: "info" | "error"; text: string; };
+
+type Latest = { soft: string | undefined; hard: string | undefined; };
 
 const QuotaGroups = (properties: {
   accounts: readonly QuotaAccount[];
   nowMs: number;
+  latest: Latest;
   isRefreshBlocked: boolean;
   onAccounts: (accounts: readonly QuotaAccount[]) => void;
 }) => (
@@ -26,16 +32,18 @@ const QuotaGroups = (properties: {
     fallback={<p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">No CLIProxy account has reported quota yet.</p>}
   >
     <div class="space-y-4">
-      <For each={groupBySource(properties.accounts)}>
+      <For each={groupBySource(properties.accounts, entry => entry.account)}>
         {group => (
           <section class="space-y-2" aria-label={`Quota for ${group.sourceName}`}>
             <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group.sourceName}</h3>
             <ul class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <For each={group.accounts}>
+              <For each={group.entries}>
                 {entry => (
                   <QuotaCard
                     entry={entry}
                     nowMs={properties.nowMs}
+                    latestSoft={properties.latest.soft}
+                    latestHard={properties.latest.hard}
                     isRefreshBlocked={properties.isRefreshBlocked}
                     onAccounts={properties.onAccounts}
                   />
@@ -64,6 +72,10 @@ export const QuotaPanel = () => {
   const [notice, setNotice] = createSignal<Notice | undefined>();
 
   const hasRefreshable = createMemo(() => accounts().some(entry => entry.hard_refreshable));
+  const latest = createMemo((): Latest => ({
+    soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
+    hard: latestMoment(accounts().map(entry => entry.hard_refreshed_at)),
+  }));
 
   const reread = async (): Promise<void> => {
     const result = await fetchQuota();
@@ -125,37 +137,49 @@ export const QuotaPanel = () => {
 
   return (
     <section class="space-y-3" aria-labelledby="quota-heading">
-      <h2 id="quota-heading" class="text-sm font-semibold text-slate-700 dark:text-slate-300">Quota</h2>
+      <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+        <h2 id="quota-heading" class="py-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Quota</h2>
+        <Errored fallback={null}>
+          <Loading fallback={null}>
+            <div class="flex flex-col items-end gap-0.5">
+              <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+                <div class="flex items-center gap-1">
+                  <span class={AGE_TEXT}>{`Soft data ${formatAge(latest().soft, nowMs())}`}</span>
+                  <IconButton
+                    label="Sync now"
+                    tooltip={isSyncing() ? "Syncing from CLIProxy" : "Sync now: read CLIProxy's credential list"}
+                    isPending={isSyncing()}
+                    isDisabled={isSyncing()}
+                    onClick={() => void sync()}
+                  >
+                    <TbOutlineCloudDownload size={16} />
+                  </IconButton>
+                </div>
+                <div class="flex items-center gap-1">
+                  <span class={AGE_TEXT}>{`Hard refresh ${formatAge(latest().hard, nowMs())}`}</span>
+                  <IconButton
+                    label="Refresh from providers"
+                    tooltip={isRefreshingAll() ? "Refreshing from providers" : "Refresh from providers: ask each provider for its quota"}
+                    isPending={isRefreshingAll()}
+                    isDisabled={isRefreshingAll() || !hasRefreshable()}
+                    onClick={() => void refreshAll()}
+                  >
+                    <TbOutlineRefresh size={16} />
+                  </IconButton>
+                </div>
+              </div>
+              <p
+                role="status"
+                class={["min-h-4 text-right text-xs", notice()?.tone === "error" ? "text-red-600 dark:text-red-400" : "text-slate-600 dark:text-slate-400"]}
+              >
+                {notice()?.text ?? ""}
+              </p>
+            </div>
+          </Loading>
+        </Errored>
+      </div>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
         <Loading fallback={<RegionPending label="Loading quota" />}>
-          <div class="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={isSyncing()}
-              onClick={() => void sync()}
-              class={CONTROL_BUTTON}
-            >
-              {isSyncing() ? "Syncing" : "Sync now"}
-            </button>
-            <button
-              type="button"
-              disabled={isRefreshingAll() || !hasRefreshable()}
-              onClick={() => void refreshAll()}
-              class={CONTROL_BUTTON}
-            >
-              {isRefreshingAll() ? "Refreshing from providers" : "Refresh from providers"}
-            </button>
-            <Show when={notice()}>
-              {current => (
-                <p
-                  role={current().tone === "error" ? "alert" : "status"}
-                  class={["text-sm", current().tone === "error" ? "text-red-600 dark:text-red-400" : "text-slate-600 dark:text-slate-400"]}
-                >
-                  {current().text}
-                </p>
-              )}
-            </Show>
-          </div>
           <Show when={rereadFailure()}>
             {message => (
               <p role="status" class="text-sm text-amber-700 dark:text-amber-400">
@@ -166,6 +190,7 @@ export const QuotaPanel = () => {
           <QuotaGroups
             accounts={accounts()}
             nowMs={nowMs()}
+            latest={latest()}
             isRefreshBlocked={isRefreshingAll()}
             onAccounts={setAccounts}
           />

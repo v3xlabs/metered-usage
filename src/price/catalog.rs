@@ -161,7 +161,7 @@ pub async fn sync(state: &AppState) -> Result<SyncReport, DatabaseError> {
             }
         }
     }
-    ModelPrice::fill(&state.database).await?;
+    ModelPrice::fill(state).await?;
 
     Ok(report)
 }

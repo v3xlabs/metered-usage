@@ -74,7 +74,7 @@ impl PriceApi {
             (Ok(from), Ok(to)) => (from, to),
             (Err(error), _) | (_, Err(error)) => return RepriceResponse::Invalid(Json(error)),
         };
-        match ModelPrice::reprice(&self.state.database, from, to).await {
+        match ModelPrice::reprice(&self.state, from, to).await {
             Ok(repriced) => RepriceResponse::Repriced(Json(Repriced {
                 repriced: i64::try_from(repriced).unwrap_or(i64::MAX),
             })),

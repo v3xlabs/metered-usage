@@ -138,7 +138,7 @@ impl From<CollectorState> for CollectorStateOutput {
 
 #[derive(Debug, Clone, Copy, Enum)]
 #[oai(rename = "SourceKind")]
-enum SourceKindOutput {
+pub enum SourceKindOutput {
     #[oai(rename = "cliproxy")]
     CliProxy,
     #[oai(rename = "litellm")]

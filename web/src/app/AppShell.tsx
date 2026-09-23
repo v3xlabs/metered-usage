@@ -1,14 +1,57 @@
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { useLocation, useNavigate } from "@solidjs/router";
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
+import { TbOutlineChevronDown } from "solid-icons/tb";
+import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 
 import { LOGIN_PATH } from "../api/client";
 import { fetchHealth } from "../api/health";
 import { signOut } from "../api/session";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { ANALYTICS_PAGES } from "./analyticsPages";
 
-const NAV_LINK = "text-sm text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100";
+const NAV_ITEM = "rounded-control px-2 py-1 text-sm hover:bg-raised hover:text-slate-900 dark:hover:text-slate-100";
+const NAV_IDLE = "text-slate-600 dark:text-slate-400";
+const NAV_CURRENT = "font-medium text-slate-900 dark:text-slate-100";
 const STATUS_TEXT = "text-xs tabular-nums text-slate-500 dark:text-slate-500";
+
+const NAV_LINKS = [
+  { path: "/logs", label: "Logs" },
+  { path: "/accounts", label: "Accounts" },
+  { path: "/prices", label: "Prices" },
+] as const;
+
+const AnalyticsMenu = (properties: { pathname: string; }) => {
+  const isCurrent = createMemo(() => properties.pathname === "/analytics" || properties.pathname.startsWith("/analytics/"));
+
+  return (
+    <DropdownMenu>
+      <DropdownMenu.Trigger class={["flex items-center gap-1", NAV_ITEM, isCurrent() ? NAV_CURRENT : NAV_IDLE]}>
+        Analytics
+        <DropdownMenu.Icon class="transition-transform data-expanded:rotate-180">
+          <TbOutlineChevronDown size={14} aria-hidden="true" />
+        </DropdownMenu.Icon>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content class="z-50 w-72 space-y-0.5 rounded-panel bg-surface p-1.5 shadow-lg ring-1 ring-hairline outline-none">
+          <For each={ANALYTICS_PAGES}>
+            {page => (
+              <DropdownMenu.Item
+                as="a"
+                href={page.path}
+                aria-current={properties.pathname === page.path ? "page" : undefined}
+                class="block rounded-control px-3 py-2 outline-none data-highlighted:bg-raised"
+              >
+                <span class="block text-sm font-medium text-slate-900 dark:text-slate-100">{page.label}</span>
+                <span class="block text-xs text-slate-500 dark:text-slate-400">{page.description}</span>
+              </DropdownMenu.Item>
+            )}
+          </For>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu>
+  );
+};
 
 const HealthBadge = () => {
   const health = createMemo(() => fetchHealth());
@@ -62,18 +105,27 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
   return (
     <div class="min-h-screen text-slate-900 dark:text-slate-100">
       <header>
-        <div class="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-2">
-          <nav class="flex min-w-0 items-center gap-4">
-            <a href="/" aria-label="metered usage" class="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight">
+        <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
+          <nav aria-label="Main" class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+            <a href="/" aria-label="metered usage, overview" class="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight">
               <img src="/logo.svg" alt="" class="size-6" />
-              metered usage
+              <span class="hidden sm:inline">metered usage</span>
             </a>
             <Show when={isSignedInView()}>
-              <a href="/" class={NAV_LINK}>Overview</a>
-              <a href="/requests" class={NAV_LINK}>Requests</a>
-              <a href="/accounts" class={NAV_LINK}>Accounts</a>
-              <a href="/sources" class={NAV_LINK}>Sources</a>
-              <a href="/prices" class={NAV_LINK}>Prices</a>
+              <div class="flex flex-wrap items-center gap-1">
+                <For each={NAV_LINKS}>
+                  {link => (
+                    <a
+                      href={link.path}
+                      aria-current={location.pathname === link.path ? "page" : undefined}
+                      class={[NAV_ITEM, location.pathname === link.path ? NAV_CURRENT : NAV_IDLE]}
+                    >
+                      {link.label}
+                    </a>
+                  )}
+                </For>
+                <AnalyticsMenu pathname={location.pathname} />
+              </div>
             </Show>
           </nav>
           <div class="flex shrink-0 items-center gap-3">

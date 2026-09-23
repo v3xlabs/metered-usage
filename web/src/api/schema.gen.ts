@@ -168,10 +168,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Every event as it is committed, as Server-Sent Events of type `usage` whose id is
-         *     the event id. Given `Last-Event-ID`, it first replays up to 500 stored events newer
-         *     than that id, oldest first. A client that falls too far behind is disconnected and
-         *     is expected to reconnect with `Last-Event-ID`.
+         * Server-Sent Events of two types. `usage` carries each event as it is committed,
+         *     with the event id as its SSE id. `priced` carries a `PricedEvent` each time a price
+         *     fill, periodic or a reprice, commits a cost for an event; it has no SSE id, so
+         *     `Last-Event-ID` keeps naming the last `usage` message. Given `Last-Event-ID`, the
+         *     stream first replays up to 500 stored events newer than that id, oldest first, as
+         *     they now read. A client that falls too far behind is disconnected and is expected
+         *     to reconnect with `Last-Event-ID`.
          */
         get: operations["stream_usage_events"];
         put?: never;
@@ -182,14 +185,18 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage/totals": {
+    "/analytics/summary": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["usage_totals"];
+        /**
+         * Totals of the window, its rate per local day, its busiest days, and how many
+         *     distinct values of each dimension it holds.
+         */
+        get: operations["analytics_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -198,14 +205,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/usage/series": {
+    "/analytics/series": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get: operations["usage_series"];
+        /**
+         * Usage per bucket of the viewer's local time. Every returned key has every bucket
+         *     of the window, zero filled. Grouped, the `top` groups ranked over the whole window
+         *     keep their key and the rest are merged under `other`; ungrouped, the key is `all`.
+         */
+        get: operations["analytics_series"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Usage split by one dimension, largest first, with the total of every group. */
+        get: operations["analytics_breakdown"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent sessions, largest first. Events without a session are left out; a session
+         *     that used several accounts reports the one that carried most of its requests.
+         */
+        get: operations["analytics_sessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/analytics/dimensions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The values of each filter that at least one event in the window has. */
+        get: operations["analytics_dimensions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -453,8 +519,25 @@ export interface components {
         };
         /** @enum {string} */
         AuthKind: "oauth" | "api_key" | "unknown";
-        /** @enum {string} */
-        Bucket: "hour" | "day";
+        /** Breakdown */
+        Breakdown: {
+            rows: components["schemas"]["BreakdownRow"][];
+            /** @description Every group, including those past the limit. */
+            total: components["schemas"]["UsageMetrics"] & unknown;
+        };
+        /**
+         * BreakdownRow
+         * @description An account or a source is keyed by its id; an absent harness or session by `unknown`.
+         */
+        BreakdownRow: {
+            key: string;
+            metrics: components["schemas"]["UsageMetrics"];
+        };
+        /**
+         * @description A week starts on Monday.
+         * @enum {string}
+         */
+        Bucket: "hour" | "day" | "week";
         /** CollectorState */
         CollectorState: {
             connected_since?: string;
@@ -481,6 +564,18 @@ export interface components {
              */
             remaining_seconds: number;
         };
+        /**
+         * DailyBurn
+         * @description The window's totals divided by `range_days`.
+         */
+        DailyBurn: {
+            /** Format: double */
+            list_cost_usd: number;
+            /** Format: double */
+            billed_cost_usd: number;
+            /** Format: int64 */
+            total_tokens: number;
+        };
         /** DeadLetter */
         DeadLetter: {
             dead_letter_id: string;
@@ -494,6 +589,36 @@ export interface components {
         DeadLetterList: {
             dead_letters: components["schemas"]["DeadLetter"][];
         };
+        /** @enum {string} */
+        Dimension: "model" | "provider" | "account" | "harness" | "source" | "session";
+        /** Dimensions */
+        Dimensions: {
+            models: string[];
+            providers: string[];
+            /** @description `unknown` stands for events that name no harness. */
+            harnesses: string[];
+            accounts: components["schemas"]["AccountSummary"][];
+            sources: components["schemas"]["SourceRef"][];
+        };
+        /**
+         * DistinctCounts
+         * @description Events without a session are not a session; events without a harness count as the
+         *     harness `unknown`.
+         */
+        DistinctCounts: {
+            /** Format: int64 */
+            models: number;
+            /** Format: int64 */
+            providers: number;
+            /** Format: int64 */
+            accounts: number;
+            /** Format: int64 */
+            harnesses: number;
+            /** Format: int64 */
+            sources: number;
+            /** Format: int64 */
+            sessions: number;
+        };
         /** Error */
         Error: {
             message: string;
@@ -503,8 +628,6 @@ export interface components {
             events: components["schemas"]["UsageEvent"][];
             next_before?: string;
         };
-        /** @enum {string} */
-        Grouping: "model" | "provider" | "account" | "harness" | "source";
         /** Health */
         Health: {
             status: string;
@@ -569,6 +692,15 @@ export interface components {
             cache_write_usd_per_mtok: number;
             /** Format: double */
             output_usd_per_mtok: number;
+        };
+        /** PeakDay */
+        PeakDay: {
+            /** @description `YYYY-MM-DD` in the viewer's local time. */
+            day: string;
+            /** Format: double */
+            list_cost_usd: number;
+            /** Format: int64 */
+            total_tokens: number;
         };
         /** Plan */
         Plan: {
@@ -638,6 +770,18 @@ export interface components {
         };
         /** @enum {string} */
         PriceOrigin: "manual" | "litellm_live" | "litellm_public";
+        /**
+         * PricedEvent
+         * @description The cost a price fill committed for an event already sent.
+         */
+        PricedEvent: {
+            event_id: string;
+            price_id: string;
+            /** Format: double */
+            list_cost_usd: number;
+            /** Format: double */
+            billed_cost_usd: number;
+        };
         /** QuotaAccount */
         QuotaAccount: {
             account: components["schemas"]["AccountSummary"];
@@ -708,6 +852,8 @@ export interface components {
             resets_at?: string;
             observed_at: string;
         };
+        /** @enum {string} */
+        RankBy: "list_cost_usd" | "billed_cost_usd" | "total_tokens" | "requests";
         /** RepriceInput */
         RepriceInput: {
             from?: string;
@@ -718,32 +864,35 @@ export interface components {
             /** Format: int64 */
             repriced: number;
         };
+        /** Series */
+        Series: {
+            buckets: components["schemas"]["SeriesBucket"][];
+        };
         /** SeriesBucket */
         SeriesBucket: {
+            /** @description RFC 3339 at the viewer's offset. */
             start: string;
             key: string;
-            /** Format: int64 */
-            requests: number;
-            /** Format: int64 */
-            failures: number;
-            /** Format: int64 */
-            input_tokens: number;
-            /** Format: int64 */
-            output_tokens: number;
-            /** Format: int64 */
-            total_tokens: number;
-            /** Format: double */
-            list_cost_usd: number;
-            /** Format: double */
-            billed_cost_usd: number;
-        };
-        /** SeriesList */
-        SeriesList: {
-            buckets: components["schemas"]["SeriesBucket"][];
+            metrics: components["schemas"]["UsageMetrics"];
         };
         /** SessionInput */
         SessionInput: {
             token: string;
+        };
+        /** SessionList */
+        SessionList: {
+            sessions: components["schemas"]["SessionRow"][];
+        };
+        /** SessionRow */
+        SessionRow: {
+            session_id: string;
+            source_id: string;
+            account: components["schemas"]["AccountSummary"];
+            harness?: string;
+            models: string[];
+            first_at: string;
+            last_at: string;
+            metrics: components["schemas"]["UsageMetrics"];
         };
         /** Source */
         Source: {
@@ -766,6 +915,35 @@ export interface components {
         SourceList: {
             sources: components["schemas"]["Source"][];
         };
+        /** SourceRef */
+        SourceRef: {
+            source_id: string;
+            name: string;
+            kind: components["schemas"]["SourceKind"];
+        };
+        /** Summary */
+        Summary: {
+            metrics: components["schemas"]["UsageMetrics"];
+            /**
+             * Format: int32
+             * @description Local days from the window's first day to the day of its last instant.
+             */
+            range_days: number;
+            /**
+             * Format: int64
+             * @description Local days with at least one event.
+             */
+            active_days: number;
+            daily_burn: components["schemas"]["DailyBurn"];
+            peak_day_by_cost?: components["schemas"]["PeakDay"];
+            peak_day_by_tokens?: components["schemas"]["PeakDay"];
+            /**
+             * Format: double
+             * @description Cache reads over input; absent when there was no input.
+             */
+            cache_hit_rate?: number;
+            distinct: components["schemas"]["DistinctCounts"];
+        };
         /** SyncOutput */
         SyncOutput: {
             /** Format: int64 */
@@ -777,40 +955,6 @@ export interface components {
         };
         /** @enum {string} */
         TokenQuality: "complete" | "unclassified" | "inconsistent";
-        /** Totals */
-        Totals: {
-            /** Format: int64 */
-            requests: number;
-            /** Format: int64 */
-            failures: number;
-            /** Format: int64 */
-            input_tokens: number;
-            /** Format: int64 */
-            output_tokens: number;
-            /** Format: int64 */
-            reasoning_tokens: number;
-            /** Format: int64 */
-            cache_read_tokens: number;
-            /** Format: int64 */
-            cache_write_tokens: number;
-            /** Format: int64 */
-            unclassified_tokens: number;
-            /** Format: int64 */
-            total_tokens: number;
-            /** Format: double */
-            list_cost_usd: number;
-            /** Format: double */
-            billed_cost_usd: number;
-            /**
-             * Format: int64
-             * @description Events no price has been found for yet, left out of `list_cost_usd`.
-             */
-            unpriced: number;
-            /** Format: int64 */
-            models: number;
-            /** Format: int64 */
-            accounts: number;
-        };
         /** UsageEvent */
         UsageEvent: {
             event_id: string;
@@ -858,6 +1002,51 @@ export interface components {
             /** Format: double */
             billed_cost_usd?: number;
         };
+        /**
+         * UsageMetrics
+         * @description Uncached input is input less cache reads and writes, never below zero. Cache savings
+         *     are what cache reads saved against the input rate, less what cache writes cost above
+         *     it, at each event's own price; negative when writes outweighed reads.
+         */
+        UsageMetrics: {
+            /** Format: int64 */
+            requests: number;
+            /** Format: int64 */
+            failures: number;
+            /** Format: int64 */
+            input_tokens: number;
+            /** Format: int64 */
+            uncached_input_tokens: number;
+            /** Format: int64 */
+            cache_read_tokens: number;
+            /** Format: int64 */
+            cache_write_tokens: number;
+            /** Format: int64 */
+            output_tokens: number;
+            /** Format: int64 */
+            reasoning_tokens: number;
+            /** Format: int64 */
+            unclassified_tokens: number;
+            /** Format: int64 */
+            total_tokens: number;
+            /** Format: double */
+            list_cost_usd: number;
+            /** Format: double */
+            billed_cost_usd: number;
+            /** Format: double */
+            cache_savings_usd: number;
+            /**
+             * Format: int64
+             * @description Events no price has been found for yet, left out of every cost.
+             */
+            unpriced_requests: number;
+            /** Format: double */
+            avg_latency_ms?: number;
+            /** Format: double */
+            avg_ttft_ms?: number;
+        };
+        /** @description One Server-Sent Event of the usage stream; its SSE type says which. */
+        UsageStreamMessage: components["schemas"]["UsageEvent"] | components["schemas"]["PricedEvent"];
     };
     responses: never;
     parameters: never;
@@ -1242,7 +1431,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["UsageEvent"][];
+                    "text/event-stream": components["schemas"]["UsageStreamMessage"][];
                 };
             };
             400: {
@@ -1263,12 +1452,17 @@ export interface operations {
             };
         };
     };
-    usage_totals: {
+    analytics_summary: {
         parameters: {
             query?: {
                 from?: string;
                 to?: string;
-                source_id?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
             };
             header?: never;
             path?: never;
@@ -1281,7 +1475,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json; charset=utf-8": components["schemas"]["Totals"];
+                    "application/json; charset=utf-8": components["schemas"]["Summary"];
                 };
             };
             400: {
@@ -1302,14 +1496,21 @@ export interface operations {
             };
         };
     };
-    usage_series: {
+    analytics_series: {
         parameters: {
-            query?: {
+            query: {
                 from?: string;
                 to?: string;
-                bucket?: components["schemas"]["Bucket"];
-                group_by?: components["schemas"]["Grouping"];
-                source_id?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
+                bucket: components["schemas"]["Bucket"];
+                group_by?: components["schemas"]["Dimension"];
+                top?: number;
+                rank_by?: components["schemas"]["RankBy"];
             };
             header?: never;
             path?: never;
@@ -1322,7 +1523,144 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json; charset=utf-8": components["schemas"]["SeriesList"];
+                    "application/json; charset=utf-8": components["schemas"]["Series"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    analytics_breakdown: {
+        parameters: {
+            query: {
+                from?: string;
+                to?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
+                group_by: components["schemas"]["Dimension"];
+                rank_by?: components["schemas"]["RankBy"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Breakdown"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    analytics_sessions: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
+                rank_by?: components["schemas"]["RankBy"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["SessionList"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    analytics_dimensions: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Dimensions"];
                 };
             };
             400: {

@@ -1,5 +1,3 @@
-import type { Bucket, Grouping } from "../api/usage";
-
 const HOURS_PER_DAY = 24;
 const MILLISECONDS_PER_HOUR = 3_600_000;
 
@@ -10,23 +8,6 @@ export const RANGES = [
 ] as const;
 
 export type Range = (typeof RANGES)[number];
-
-export const BUCKETS: readonly Bucket[] = ["hour", "day"];
-
-export const BUCKET_LABELS: Record<Bucket, string> = {
-  hour: "Hourly",
-  day: "Daily",
-};
-
-export const GROUPINGS: readonly Grouping[] = ["model", "provider", "account", "harness", "source"];
-
-export const GROUPING_LABELS: Record<Grouping, string> = {
-  model: "Model",
-  provider: "Provider",
-  account: "Account",
-  harness: "Harness",
-  source: "Source",
-};
 
 export const rangeStart = (range: Range): string =>
   new Date(Date.now() - range.hours * MILLISECONDS_PER_HOUR).toISOString();

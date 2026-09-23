@@ -92,19 +92,40 @@ struct ListedAccount {
 }
 
 #[derive(Deserialize)]
-struct Totals {
+struct Summary {
+    metrics: Metrics,
+    distinct: Distinct,
+}
+
+#[derive(Deserialize)]
+struct Metrics {
     requests: i64,
     failures: i64,
     input_tokens: i64,
     output_tokens: i64,
     unclassified_tokens: i64,
     total_tokens: i64,
-    unpriced: i64,
+    unpriced_requests: i64,
+}
+
+#[derive(Deserialize)]
+struct Distinct {
     accounts: i64,
 }
 
 #[derive(Deserialize)]
-struct SeriesList {
+struct Breakdown {
+    rows: Vec<BreakdownRow>,
+}
+
+#[derive(Deserialize)]
+struct BreakdownRow {
+    key: String,
+    metrics: Metrics,
+}
+
+#[derive(Deserialize)]
+struct Series {
     buckets: Vec<SeriesBucket>,
 }
 
@@ -112,8 +133,7 @@ struct SeriesList {
 struct SeriesBucket {
     start: String,
     key: String,
-    requests: i64,
-    total_tokens: i64,
+    metrics: Metrics,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +255,13 @@ async fn accounts(client: &TestClient<impl Endpoint>) -> Vec<ListedAccount> {
         .accounts
 }
 
+async fn summary(client: &TestClient<impl Endpoint>) -> Summary {
+    let summary = client.get("/api/analytics/summary").send().await;
+    summary.assert_status_is_ok();
+
+    summary.json().await.value().deserialize::<Summary>()
+}
+
 #[tokio::test]
 async fn a_batch_lands_as_the_gateway_described_it() {
     let gateway = gateway().await.expect("a gateway");
@@ -282,17 +309,18 @@ async fn a_batch_lands_as_the_gateway_described_it() {
         claude.error_message
     );
 
-    let totals = gateway.client.get("/api/usage/totals").send().await;
-    totals.assert_status_is_ok();
-    let totals = totals.json().await.value().deserialize::<Totals>();
-    assert_eq!(totals.requests, 3);
-    assert_eq!(totals.failures, 2);
-    assert_eq!(totals.input_tokens, 12000);
-    assert_eq!(totals.output_tokens, 345);
-    assert_eq!(totals.total_tokens, 12345);
-    assert_eq!(totals.unclassified_tokens, 0);
-    assert_eq!(totals.unpriced, 3, "no price is known in this test");
-    assert_eq!(totals.accounts, 3);
+    let summary = summary(&gateway.client).await;
+    assert_eq!(summary.metrics.requests, 3);
+    assert_eq!(summary.metrics.failures, 2);
+    assert_eq!(summary.metrics.input_tokens, 12000);
+    assert_eq!(summary.metrics.output_tokens, 345);
+    assert_eq!(summary.metrics.total_tokens, 12345);
+    assert_eq!(summary.metrics.unclassified_tokens, 0);
+    assert_eq!(
+        summary.metrics.unpriced_requests, 3,
+        "no price is known in this test"
+    );
+    assert_eq!(summary.distinct.accounts, 3);
 }
 
 #[tokio::test]
@@ -414,10 +442,10 @@ async fn an_inconsistent_breakdown_is_stored_as_unclassified() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].token_quality.as_deref(), Some("inconsistent"));
     assert_eq!(events[0].unclassified_tokens, 12345);
-    let totals = gateway.client.get("/api/usage/totals").send().await;
-    totals.assert_status_is_ok();
-    let totals = totals.json().await.value().deserialize::<Totals>();
-    assert_eq!(totals.unclassified_tokens, 12345);
+    assert_eq!(
+        summary(&gateway.client).await.metrics.unclassified_tokens,
+        12345
+    );
 }
 
 #[tokio::test]
@@ -514,23 +542,20 @@ async fn a_merged_account_hands_its_events_and_its_credential_to_the_target() {
     let remaining = accounts(&gateway.client).await;
     assert_eq!(remaining.len(), 2, "a merged account is not listed");
     assert!(remaining.iter().all(|account| account.account_id != merged));
-    let by_account = |series: SeriesList, account: &str| {
-        series
-            .buckets
-            .iter()
-            .filter(|bucket| bucket.key == account)
-            .map(|bucket| bucket.requests)
-            .sum::<i64>()
-    };
-    let series = gateway
+    let breakdown = gateway
         .client
-        .get("/api/usage/series?bucket=day&group_by=account")
+        .get("/api/analytics/breakdown?group_by=account")
         .send()
         .await;
-    series.assert_status_is_ok();
-    let series = series.json().await.value().deserialize::<SeriesList>();
-    assert!(series.buckets.iter().all(|bucket| bucket.key != merged));
-    assert_eq!(by_account(series, &target), 2);
+    breakdown.assert_status_is_ok();
+    let breakdown = breakdown.json().await.value().deserialize::<Breakdown>();
+    assert!(breakdown.rows.iter().all(|row| row.key != merged));
+    let absorbed = breakdown
+        .rows
+        .iter()
+        .find(|row| row.key == target)
+        .expect("the target's row");
+    assert_eq!(absorbed.metrics.requests, 2);
 
     let mut later = record(CLAUDE, "claude-1").expect("a reference record");
     later["timestamp"] = json!("2026-01-15T11:00:00+02:00");
@@ -575,18 +600,21 @@ async fn a_series_groups_a_day_under_the_source_that_reported_it() {
 
     let series = gateway
         .client
-        .get("/api/usage/series?bucket=day&group_by=source")
+        .get(
+            "/api/analytics/series?bucket=day&group_by=source\
+             &from=2026-01-15T00:00:00Z&to=2026-01-16T00:00:00Z",
+        )
         .send()
         .await;
     series.assert_status_is_ok();
-    let series = series.json().await.value().deserialize::<SeriesList>();
+    let series = series.json().await.value().deserialize::<Series>();
 
     assert_eq!(series.buckets.len(), 1);
     let bucket = &series.buckets[0];
-    assert_eq!(bucket.start, "2026-01-15T00:00:00Z");
+    assert_eq!(bucket.start, "2026-01-15T00:00:00+00:00");
     assert_eq!(bucket.key, gateway.source_id);
-    assert_eq!(bucket.requests, 3);
-    assert_eq!(bucket.total_tokens, 12345);
+    assert_eq!(bucket.metrics.requests, 3);
+    assert_eq!(bucket.metrics.total_tokens, 12345);
 }
 
 #[tokio::test]

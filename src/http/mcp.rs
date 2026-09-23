@@ -1,12 +1,17 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
+use jiff::tz::Offset;
 use poem::http::{HeaderValue, header};
 use poem::{EndpointExt, IntoEndpoint, Request};
 use poem_mcpserver::{McpServer, Tools, streamable_http, tool::StructuredContent};
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::analytics::AnalyticsError;
+use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::metrics::UsageMetrics;
+use crate::analytics::summary::{PeakDay, Summary};
 use crate::app::AppState;
 use crate::http::api::leverage::DEFAULT_PERIODS as DEFAULT_LEVERAGE_PERIODS;
 use crate::plan::leverage::PlanLeverage;
@@ -34,18 +39,122 @@ struct SourceOutput {
     event_count: i64,
 }
 
+/// Totals of a window and its rate per local day. `cache_savings_usd` is what cache reads
+/// saved against the input rate, less what cache writes cost above it; it can be negative.
 #[derive(Debug, Serialize, JsonSchema)]
-struct TotalsOutput {
+struct SummaryOutput {
+    metrics: MetricsOutput,
+    range_days: i32,
+    active_days: i64,
+    daily_burn: DailyBurnOutput,
+    peak_day_by_cost: Option<PeakDayOutput>,
+    peak_day_by_tokens: Option<PeakDayOutput>,
+    cache_hit_rate: Option<f64>,
+    distinct: DistinctOutput,
+}
+
+impl From<Summary> for SummaryOutput {
+    fn from(summary: Summary) -> Self {
+        Self {
+            metrics: summary.metrics.into(),
+            range_days: summary.range_days,
+            active_days: summary.active_days,
+            daily_burn: DailyBurnOutput {
+                list_cost_usd: summary.daily_burn.list_cost_usd,
+                billed_cost_usd: summary.daily_burn.billed_cost_usd,
+                total_tokens: summary.daily_burn.total_tokens,
+            },
+            peak_day_by_cost: summary.peak_day_by_cost.map(PeakDayOutput::from),
+            peak_day_by_tokens: summary.peak_day_by_tokens.map(PeakDayOutput::from),
+            cache_hit_rate: summary.cache_hit_rate,
+            distinct: DistinctOutput {
+                models: summary.distinct.models,
+                providers: summary.distinct.providers,
+                accounts: summary.distinct.accounts,
+                harnesses: summary.distinct.harnesses,
+                sources: summary.distinct.sources,
+                sessions: summary.distinct.sessions,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct MetricsOutput {
     requests: i64,
     failures: i64,
     input_tokens: i64,
-    output_tokens: i64,
-    reasoning_tokens: i64,
+    uncached_input_tokens: i64,
     cache_read_tokens: i64,
     cache_write_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: i64,
+    unclassified_tokens: i64,
     total_tokens: i64,
+    list_cost_usd: f64,
+    billed_cost_usd: f64,
+    cache_savings_usd: f64,
+    unpriced_requests: i64,
+    avg_latency_ms: Option<f64>,
+    avg_ttft_ms: Option<f64>,
+}
+
+impl From<UsageMetrics> for MetricsOutput {
+    fn from(metrics: UsageMetrics) -> Self {
+        Self {
+            requests: metrics.requests,
+            failures: metrics.failures,
+            input_tokens: metrics.input_tokens,
+            uncached_input_tokens: metrics.uncached_input_tokens,
+            cache_read_tokens: metrics.cache_read_tokens,
+            cache_write_tokens: metrics.cache_write_tokens,
+            output_tokens: metrics.output_tokens,
+            reasoning_tokens: metrics.reasoning_tokens,
+            unclassified_tokens: metrics.unclassified_tokens,
+            total_tokens: metrics.total_tokens,
+            list_cost_usd: metrics.list_cost_usd,
+            billed_cost_usd: metrics.billed_cost_usd,
+            cache_savings_usd: metrics.cache_savings_usd,
+            unpriced_requests: metrics.unpriced_requests,
+            avg_latency_ms: metrics.avg_latency_ms(),
+            avg_ttft_ms: metrics.avg_ttft_ms(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct DailyBurnOutput {
+    list_cost_usd: f64,
+    billed_cost_usd: f64,
+    total_tokens: i64,
+}
+
+/// `day` is `YYYY-MM-DD` at the requested offset.
+#[derive(Debug, Serialize, JsonSchema)]
+struct PeakDayOutput {
+    day: String,
+    list_cost_usd: f64,
+    total_tokens: i64,
+}
+
+impl From<PeakDay> for PeakDayOutput {
+    fn from(peak: PeakDay) -> Self {
+        Self {
+            day: peak.day.to_string(),
+            list_cost_usd: peak.list_cost_usd,
+            total_tokens: peak.total_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct DistinctOutput {
     models: i64,
+    providers: i64,
     accounts: i64,
+    harnesses: i64,
+    sources: i64,
+    sessions: i64,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -322,33 +431,34 @@ impl UsageTools {
         }))
     }
 
-    /// Sum every metered request in a window. Both bounds are RFC 3339 and optional.
-    async fn usage_totals(
+    /// Summarize every metered request in a window: totals, cost, cache savings, the rate
+    /// per local day and the busiest days. Both bounds are RFC 3339 and optional; `to` is
+    /// exclusive and defaults to now, and `from` absent starts at the first request.
+    /// `utc_offset_minutes` places day boundaries in local time.
+    async fn usage_summary(
         &self,
         from: Option<String>,
         to: Option<String>,
-    ) -> Result<StructuredContent<TotalsOutput>, String> {
-        let filter = UsageFilter {
-            from: instant(from.as_deref(), "from")?,
-            to: instant(to.as_deref(), "to")?,
-            ..UsageFilter::default()
-        };
-        let totals = UsageEvent::totals(&self.state.database, &filter)
+        utc_offset_minutes: Option<i32>,
+    ) -> Result<StructuredContent<SummaryOutput>, String> {
+        let offset = utc_offset_minutes
+            .unwrap_or(0)
+            .checked_mul(60)
+            .and_then(|seconds| Offset::from_seconds(seconds).ok())
+            .ok_or_else(|| "utc_offset_minutes is outside the supported range".to_owned())?;
+        let filter = AnalyticsFilter::window(
+            instant(from.as_deref(), "from")?,
+            instant(to.as_deref(), "to")?,
+            offset,
+        );
+        let summary = Summary::load(&self.state.database, &filter)
             .await
-            .map_err(|error| refuse("MCP totals failed", &error))?;
+            .map_err(|error| match error {
+                AnalyticsError::Database(error) => refuse("MCP summary failed", &error),
+                refused => refused.to_string(),
+            })?;
 
-        Ok(StructuredContent(TotalsOutput {
-            requests: totals.requests,
-            failures: totals.failures,
-            input_tokens: totals.input_tokens,
-            output_tokens: totals.output_tokens,
-            reasoning_tokens: totals.reasoning_tokens,
-            cache_read_tokens: totals.cache_read_tokens,
-            cache_write_tokens: totals.cache_write_tokens,
-            total_tokens: totals.total_tokens,
-            models: totals.models,
-            accounts: totals.accounts,
-        }))
+        Ok(StructuredContent(summary.into()))
     }
 
     /// The newest metered requests, most recent first, each with the account it was

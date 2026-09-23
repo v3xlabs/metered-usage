@@ -1,11 +1,13 @@
 //! The two costs an event carries: its tokens at list rates, and what was billed for it.
 
 use jiff::Timestamp;
-use sqlx::SqliteExecutor;
+use sqlx::SqliteConnection;
 
+use crate::app::AppState;
+use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
-use crate::database::{Database, DatabaseError};
 use crate::price::ModelPrice;
+use crate::usage::{PricedEvent, UsageUpdate};
 
 /// Picks one price per unpriced event and freezes its cost onto the event. Events no
 /// price matches are left untouched, so they are not rewritten on every pass.
@@ -48,22 +50,31 @@ const FILL: &str = "WITH ranked AS ( \
      FROM chosen, model_price AS price, account \
      WHERE usage_event.event_id = chosen.event_id \
      AND price.price_id = chosen.price_id \
-     AND account.account_id = usage_event.account_id";
+     AND account.account_id = usage_event.account_id \
+     RETURNING usage_event.event_id, usage_event.price_id, usage_event.list_cost_usd, \
+     usage_event.billed_cost_usd";
 
 impl ModelPrice {
-    /// Answers how many events were priced.
-    pub async fn fill(database: &Database) -> Result<u64, DatabaseError> {
-        fill(&database.pool).await
+    /// Answers how many events were priced, and tells the live stream what each costs
+    /// once that is committed.
+    pub async fn fill(state: &AppState) -> Result<usize, DatabaseError> {
+        let mut transaction = state.database.write().await?;
+        let priced = fill(&mut transaction).await?;
+        transaction.commit().await?;
+        let count = priced.len();
+        publish(state, priced);
+
+        Ok(count)
     }
 
     /// Forgets the cost of every event in the range and prices it again. A billed cost is
     /// kept only where the upstream set it, which only a LiteLLM source does.
     pub async fn reprice(
-        database: &Database,
+        state: &AppState,
         from: Option<Timestamp>,
         to: Option<Timestamp>,
     ) -> Result<u64, DatabaseError> {
-        let mut transaction = database.write().await?;
+        let mut transaction = state.database.write().await?;
         let cleared = sqlx::query(
             "UPDATE usage_event SET price_id = NULL, list_cost_usd = NULL, \
              billed_cost_usd = CASE WHEN (SELECT source.kind FROM source \
@@ -76,13 +87,29 @@ impl ModelPrice {
         .execute(&mut *transaction)
         .await?
         .rows_affected();
-        fill(&mut *transaction).await?;
+        let priced = fill(&mut transaction).await?;
         transaction.commit().await?;
+        publish(state, priced);
 
         Ok(cleared)
     }
 }
 
-async fn fill(executor: impl SqliteExecutor<'_>) -> Result<u64, DatabaseError> {
-    Ok(sqlx::query(FILL).execute(executor).await?.rows_affected())
+async fn fill(connection: &mut SqliteConnection) -> Result<Vec<PricedEvent>, DatabaseError> {
+    Ok(sqlx::query_as::<_, PricedEvent>(FILL)
+        .fetch_all(connection)
+        .await?)
+}
+
+/// Only after the commit, so a client never sees a cost the database does not hold.
+fn publish(state: &AppState, priced: Vec<PricedEvent>) {
+    if state.usage.receiver_count() == 0 {
+        return;
+    }
+    for event in priced {
+        // Every subscriber may have left since the count was read.
+        if state.usage.send(UsageUpdate::Priced(event)).is_err() {
+            break;
+        }
+    }
 }

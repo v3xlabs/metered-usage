@@ -10,7 +10,7 @@ use poem_openapi::OpenApiService;
 
 use crate::app::AppState;
 use crate::http::api::{
-    account, dead_letter, health, leverage, plan, price, quota, session, source, usage,
+    account, analytics, dead_letter, health, leverage, plan, price, quota, session, source, usage,
 };
 use crate::http::auth::RequireCredential;
 
@@ -24,6 +24,7 @@ type Apis = (
     source::SourceApi,
     account::AccountApi,
     usage::UsageApi,
+    analytics::AnalyticsApi,
     dead_letter::DeadLetterApi,
     price::PriceApi,
     plan::PlanApi,
@@ -47,6 +48,9 @@ pub fn service(state: &Arc<AppState>) -> OpenApiService<Apis, ()> {
                 state: Arc::clone(state),
             },
             usage::UsageApi {
+                state: Arc::clone(state),
+            },
+            analytics::AnalyticsApi {
                 state: Arc::clone(state),
             },
             dead_letter::DeadLetterApi {
