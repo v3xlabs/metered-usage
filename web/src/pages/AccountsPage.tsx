@@ -18,6 +18,7 @@ import { RegionFailure, RegionPending } from "../components/Region";
 import { SourceList } from "../components/SourceList";
 import { accountLabel, groupBySource } from "../domain/account";
 import { formatExact, formatMoment } from "../domain/format";
+import { isPrivate, redact } from "../domain/privacy";
 
 const NameView = (properties: { account: Account; isFocused: boolean; onEdit: () => void; }) => {
   let nameButton: HTMLButtonElement | undefined;
@@ -74,10 +75,11 @@ const NameInput = (properties: {
           input = element;
         }}
         id={inputId}
-        type="text"
+        type={isPrivate() ? "password" : "text"}
+        autocomplete="off"
         value={draft()}
         onInput={event => setDraft(event.currentTarget.value)}
-        placeholder={properties.account.label ?? "Display name"}
+        placeholder={properties.account.label === undefined ? "Display name" : redact(properties.account.label)}
         readonly={properties.isSaving}
         aria-busy={properties.isSaving ? "true" : undefined}
         onKeyDown={(event) => {

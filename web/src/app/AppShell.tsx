@@ -8,6 +8,7 @@ import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js"
 import { LOGIN_PATH } from "../api/client";
 import { fetchHealth } from "../api/health";
 import { signOut } from "../api/session";
+import { PrivacyToggle } from "../components/PrivacyToggle";
 import { ThemeToggle } from "../components/ThemeToggle";
 import { ANALYTICS_PAGES } from "./analyticsPages";
 
@@ -133,6 +134,7 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
           </nav>
           <div class="flex shrink-0 items-center gap-3">
             <HealthBadge />
+            <PrivacyToggle />
             <ThemeToggle />
             <Show when={isSignedInView()}>
               <SignOutButton />

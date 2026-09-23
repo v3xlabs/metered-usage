@@ -2,6 +2,7 @@ import type { AccountSummary } from "../api/accounts";
 import type { AnalyticsFilters, Bucket, Dimensions, FilterDimension, RankBy, UsageMetrics } from "../api/analytics";
 import { providerLabel } from "../components/ProviderIcon";
 import { accountLabel } from "./account";
+import { redact } from "./privacy";
 
 const DAY_MS = 86_400_000;
 const HOUR_BUCKET_MAX_DAYS = 2;
@@ -177,14 +178,14 @@ export const labelKey = (dimension: FilterDimension | "session", key: string, di
   if (dimension === "account") {
     const account = dimensions?.accounts.find(candidate => candidate.account_id === key);
 
-    return account === undefined ? { text: key } : { text: accountName(account), provider: account.provider };
+    return account === undefined ? { text: redact(key) } : { text: accountName(account), provider: account.provider };
   }
 
   if (dimension === "source") {
     return { text: dimensions?.sources.find(candidate => candidate.source_id === key)?.name ?? key };
   }
 
-  return { text: key };
+  return { text: dimension === "session" ? redact(key) : key };
 };
 
 export const cacheHitRate = (metrics: UsageMetrics): number | undefined =>

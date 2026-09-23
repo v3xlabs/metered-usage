@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 
 import type { DeadLetter } from "../api/deadLetters";
 import { formatMoment } from "../domain/format";
+import { redact } from "../domain/privacy";
 
 // The payload is JSON text written by our own normalizer, but a record rejected for being
 // malformed may carry text that does not parse, so it is shown as stored in that case.
@@ -32,7 +33,7 @@ export const DeadLetterList = (properties: { deadLetters: readonly DeadLetter[];
             <details>
               <summary class="text-xs text-slate-600 dark:text-slate-400">Payload</summary>
               <pre class="mt-1.5 max-h-96 overflow-auto rounded-control bg-raised p-3 text-xs text-slate-800 dark:text-slate-200">
-                {indentPayload(deadLetter.payload)}
+                {redact(indentPayload(deadLetter.payload))}
               </pre>
             </details>
           </li>
