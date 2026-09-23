@@ -9,6 +9,7 @@ use crate::analytics::bucket::Bucket;
 use crate::analytics::filter::AnalyticsFilter;
 use crate::analytics::metrics::UsageMetrics;
 use crate::analytics::query::{Aggregate, Column, aggregate};
+use crate::database::codec::StoredTimestamp;
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -26,7 +27,8 @@ pub struct Summary {
     pub distinct: DistinctCounts,
 }
 
-/// The window's totals spread over every day it covers, active or not.
+/// The window's totals spread over every day it covers since the first event ever
+/// recorded, active or not, so days before tracking began do not dilute the rate.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DailyBurn {
     pub list_cost_usd: f64,
@@ -99,6 +101,12 @@ impl Summary {
             .build_query_as::<Overall>()
             .fetch_one(&database.pool)
             .await?;
+        let tracked_since = sqlx::query_scalar::<_, Option<StoredTimestamp>>(
+            "SELECT MIN(occurred_at) FROM usage_event",
+        )
+        .fetch_one(&database.pool)
+        .await?
+        .map(Timestamp::from);
 
         let mut metrics = UsageMetrics::default();
         let mut peak_day_by_cost: Option<PeakDay> = None;
@@ -140,15 +148,19 @@ impl Summary {
             }
         }
 
+        let burn_days = match (filter.from.or(first_at), tracked_since) {
+            (Some(from), Some(since)) => range_days(filter, from.max(since))?,
+            _ => 0,
+        };
         let range_days = match filter.from.or(first_at) {
             Some(from) => range_days(filter, from)?,
             None => 0,
         };
-        let daily_burn = if range_days > 0 {
+        let daily_burn = if burn_days > 0 {
             DailyBurn {
-                list_cost_usd: metrics.list_cost_usd / f64::from(range_days),
-                billed_cost_usd: metrics.billed_cost_usd / f64::from(range_days),
-                total_tokens: metrics.total_tokens / i64::from(range_days),
+                list_cost_usd: metrics.list_cost_usd / f64::from(burn_days),
+                billed_cost_usd: metrics.billed_cost_usd / f64::from(burn_days),
+                total_tokens: metrics.total_tokens / i64::from(burn_days),
             }
         } else {
             DailyBurn::default()

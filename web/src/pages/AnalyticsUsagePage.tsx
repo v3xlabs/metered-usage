@@ -126,7 +126,9 @@ export const AnalyticsUsagePage = () => {
       <div class="flex flex-wrap items-baseline justify-between gap-2">
         <h1 class="text-lg font-semibold">Usage</h1>
         <p class="text-sm text-slate-500 tabular-nums dark:text-slate-400">
-          {`${DAY_LABEL.format(new Date(`${usageWindow().firstDay}T00:00:00`))} to ${DAY_LABEL.format(new Date(`${usageWindow().lastDay}T00:00:00`))}`}
+          {usageWindow().firstDay === usageWindow().lastDay
+            ? DAY_LABEL.format(new Date(`${usageWindow().firstDay}T00:00:00`))
+            : `${DAY_LABEL.format(new Date(`${usageWindow().firstDay}T00:00:00`))} to ${DAY_LABEL.format(new Date(`${usageWindow().lastDay}T00:00:00`))}`}
         </p>
       </div>
       <UsageToolbar
@@ -139,8 +141,8 @@ export const AnalyticsUsagePage = () => {
         filters={filters()}
         dimensions={dimensions()}
         onRange={next => setSearch(next === "custom"
-          ? { range: next, from: usageWindow().firstDay, to: usageWindow().lastDay }
-          : { range: next, from: undefined, to: undefined })}
+          ? { range: next, from: usageWindow().firstDay, to: usageWindow().lastDay, bucket: undefined }
+          : { range: next, from: undefined, to: undefined, bucket: undefined })}
         onCustom={(firstDay, lastDay) => setSearch({ range: "custom", from: firstDay, to: lastDay })}
         onMetric={next => setSearch({ metric: next })}
         onKinds={next => setSearch({ kinds: next.length === TOKEN_KINDS.length ? undefined : [...next] })}
