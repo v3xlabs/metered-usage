@@ -120,7 +120,7 @@ export const OverviewPage = () => {
                 )}
               </For>
             </div>
-            <a href={`/analytics?range=${range()}`} class="text-sm text-slate-700 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100">
+            <a href={`/usage?range=${range()}`} class="text-sm text-slate-700 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100">
               More in Analytics
             </a>
           </div>

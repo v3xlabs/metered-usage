@@ -25,12 +25,12 @@ const NAV_LINKS = [
 ] as const;
 
 const AnalyticsMenu = (properties: { pathname: string; }) => {
-  const isCurrent = createMemo(() => properties.pathname === "/analytics" || properties.pathname.startsWith("/analytics/"));
+  const isCurrent = createMemo(() => properties.pathname === "/usage" || properties.pathname.startsWith("/usage/"));
 
   return (
     <DropdownMenu>
       <DropdownMenu.Trigger class={["flex items-center gap-1", NAV_ITEM, isCurrent() ? NAV_CURRENT : NAV_IDLE]}>
-        Analytics
+        Usage
         <DropdownMenu.Icon class="transition-transform data-expanded:rotate-180">
           <TbOutlineChevronDown size={14} aria-hidden="true" />
         </DropdownMenu.Icon>
@@ -112,9 +112,9 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
       <header>
         <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
           <nav aria-label="Main" class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
-            <a href="/" aria-label="metered usage, overview" class="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight">
+            <a href="/" aria-label="metered, overview" class="flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight">
               <img src="/logo.svg" alt="" class="size-6" />
-              <span class="hidden sm:inline">metered usage</span>
+              <span class="hidden sm:inline">metered</span>
             </a>
             <Show when={isSignedInView()}>
               <div class="flex flex-wrap items-center gap-1">

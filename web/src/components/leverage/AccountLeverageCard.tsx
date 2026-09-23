@@ -43,7 +43,7 @@ const LeverageSpark = (properties: { periods: readonly LeveragePeriod[]; }) => {
   );
 };
 
-const CurrentPeriod = (properties: { period: LeveragePeriod; nowMs: number; }) => {
+const CurrentPeriod = (properties: { period: LeveragePeriod; nowMs: number; isLeverageShown: boolean; }) => {
   const progress = createMemo(() => periodProgress(properties.period, properties.nowMs));
 
   return (
@@ -53,7 +53,9 @@ const CurrentPeriod = (properties: { period: LeveragePeriod; nowMs: number; }) =
         {`This period, day ${progress().day} of ${progress().days}`}
       </span>
       <span class="whitespace-nowrap">{periodText(properties.period)}</span>
-      <span class={["text-sm font-semibold", leverageText(properties.period.leverage)]}>{formatLeverage(properties.period.leverage)}</span>
+      <Show when={properties.isLeverageShown}>
+        <span class={["text-sm font-semibold", leverageText(properties.period.leverage)]}>{formatLeverage(properties.period.leverage)}</span>
+      </Show>
     </p>
   );
 };
@@ -81,7 +83,7 @@ const ActivePlan = (properties: { history: PlanHistory; nowMs: number; }) => {
         <LeverageSpark periods={properties.history.periods} />
       </div>
       <Show when={current()}>
-        {period => <CurrentPeriod period={period()} nowMs={properties.nowMs} />}
+        {period => <CurrentPeriod period={period()} nowMs={properties.nowMs} isLeverageShown={properties.history.periods.length > 1} />}
       </Show>
     </>
   );
@@ -103,7 +105,7 @@ export const AccountLeverageCard = (properties: {
       class={[
         "relative flex flex-col gap-3 rounded-panel bg-surface p-4",
         "hover:bg-[linear-gradient(160deg,color-mix(in_srgb,var(--brand)_24%,transparent),color-mix(in_srgb,var(--brand)_3%,transparent)_55%)]",
-        { "ring-1 ring-emerald-500/50 ring-inset": properties.isSelected },
+        { "ring-1 ring-(color:--brand)/50 ring-inset": properties.isSelected },
       ]}
     >
       <Show when={hasHistory(properties.entry)}>
@@ -112,7 +114,7 @@ export const AccountLeverageCard = (properties: {
           aria-pressed={properties.isSelected ? "true" : "false"}
           aria-label={`Show the history of ${accountLabel(properties.entry.account)}`}
           onClick={() => properties.onSelect()}
-          class="absolute inset-0 rounded-panel focus-visible:outline-2 focus-visible:outline-emerald-500"
+          class="absolute inset-0 rounded-panel focus-visible:outline-2 focus-visible:outline-(--brand)"
         />
       </Show>
       <div class="flex items-center gap-2">
@@ -150,7 +152,7 @@ export const AccountLeverageCard = (properties: {
                 <button
                   type="button"
                   onClick={() => setEditing({ plan: undefined, suggestedName: detected() })}
-                  class="relative z-10 rounded-control bg-emerald-600 px-3 py-1 text-sm font-medium text-white hover:bg-emerald-500"
+                  class="relative z-10 rounded-control bg-(--brand) px-3 py-1 text-sm font-medium text-white hover:bg-[color-mix(in_srgb,var(--brand)_85%,black)]"
                 >
                   Track this plan
                 </button>

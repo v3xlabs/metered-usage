@@ -290,7 +290,7 @@ const AccountsSection = () => {
         <p class="text-xs text-slate-500 dark:text-slate-400">
           Subscription plans are managed on
           {" "}
-          <a href="/analytics/leverage" class="text-slate-700 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100">Plan leverage</a>
+          <a href="/usage/plans" class="text-slate-700 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100">Plan leverage</a>
         </p>
       </div>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>

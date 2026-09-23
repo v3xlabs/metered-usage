@@ -5,7 +5,7 @@ import { AnalyticsUsagePage } from "../pages/AnalyticsUsagePage";
 import { PlanLeveragePage } from "../pages/PlanLeveragePage";
 
 export type AnalyticsPage = {
-  path: `/analytics${string}`;
+  path: `/usage${string}`;
   label: string;
   description: string;
   component: Component;
@@ -13,19 +13,19 @@ export type AnalyticsPage = {
 
 export const ANALYTICS_PAGES: readonly AnalyticsPage[] = [
   {
-    path: "/analytics",
-    label: "Usage",
+    path: "/usage",
+    label: "Analytics",
     description: "Cost, tokens and requests over time, by any dimension",
     component: AnalyticsUsagePage,
   },
   {
-    path: "/analytics/models",
+    path: "/usage/models",
     label: "Models",
     description: "Compare models by volume, latency, time to first token and output speed",
     component: AnalyticsModelsPage,
   },
   {
-    path: "/analytics/leverage",
+    path: "/usage/plans",
     label: "Plan leverage",
     description: "List cost against each subscription price, per billing period",
     component: PlanLeveragePage,
