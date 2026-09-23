@@ -3,10 +3,10 @@ import { createMemo, For, isPending, Show } from "solid-js";
 import type { AnalyticsScope } from "../../api/analytics";
 import { fetchSessions } from "../../api/analytics";
 import type { CostBasis, Measure, TokenKind } from "../../domain/analytics";
-import { accountName, costOf, measureOf, rankByOf, tokensOf } from "../../domain/analytics";
+import { costOf, measureOf, rankByOf, tokensOf } from "../../domain/analytics";
 import { formatCompact, formatMoment, formatUsd } from "../../domain/format";
 import { redact } from "../../domain/privacy";
-import { KeyName } from "./KeyName";
+import { AccountName } from "../AccountName";
 import { EmptyState, Panel, Stale } from "./Panel";
 
 const SESSION_LIMIT = 20;
@@ -56,7 +56,7 @@ export const SessionsPanel = (properties: {
                       </td>
                       <td class={CELL}>{session.harness ?? "Unknown"}</td>
                       <td class={[CELL, "max-w-56"]}>
-                        <KeyName label={{ text: accountName(session.account), provider: session.account.provider }} />
+                        <AccountName account={session.account} isSourceShown={false} />
                       </td>
                       <td class={[CELL, "max-w-56 truncate"]} title={session.models.join(", ")}>{session.models.join(", ")}</td>
                       <td class={[CELL, "text-right tabular-nums"]}>{formatCompact(tokensOf(session.metrics, properties.kinds))}</td>
