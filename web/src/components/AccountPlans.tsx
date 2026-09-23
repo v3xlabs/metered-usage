@@ -9,6 +9,7 @@ import { createPlan, deletePlan, updatePlan } from "../api/plans";
 import { accountLabel } from "../domain/account";
 import { utcDayOf, utcMidnight } from "../domain/dateInput";
 import { formatCompact, formatExact, formatUsd, formatUtcDay } from "../domain/format";
+import { redact } from "../domain/privacy";
 import { AccountName, AuthKindIcon } from "./AccountName";
 
 const FIELD = "w-full rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
@@ -141,7 +142,7 @@ const PlanForm = (properties: {
         </Show>
       </div>
       <Show when={failure()}>
-        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
     </form>
   );
@@ -268,7 +269,7 @@ const PlanEntry = (properties: { plan: Plan; periods: readonly LeveragePeriod[];
         />
       </Show>
       <Show when={failure()}>
-        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
       <LeverageTable plan={properties.plan} periods={properties.periods} />
     </li>

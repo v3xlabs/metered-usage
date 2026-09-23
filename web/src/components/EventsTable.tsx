@@ -76,7 +76,7 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                     <AccountName account={record.account} isSourceShown={needingSource().has(record.account.account_id)} />
                   </td>
                   <td class={[CELL, "text-slate-600 dark:text-slate-300"]}>{record.caller === undefined ? "-" : redact(record.caller)}</td>
-                  <td class={[CELL, "text-slate-600 dark:text-slate-300"]} title={record.user_agent}>{record.harness ?? "-"}</td>
+                  <td class={[CELL, "text-slate-600 dark:text-slate-300"]} title={record.user_agent === undefined ? undefined : redact(record.user_agent)}>{record.harness ?? "-"}</td>
                   <td class={[CELL, "text-right whitespace-nowrap tabular-nums"]}>
                     <span class="text-slate-900 dark:text-slate-100">{formatExact(record.total_tokens)}</span>
                     <span class="ml-1.5 text-slate-500 dark:text-slate-500">

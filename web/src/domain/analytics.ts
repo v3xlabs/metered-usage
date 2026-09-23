@@ -162,7 +162,7 @@ export const autoBucket = (days: number): Bucket => {
 export const utcOffsetMinutes = (): number => -new Date().getTimezoneOffset();
 
 export const accountName = (account: AccountSummary): string =>
-  `${accountLabel(account)} (${providerLabel(account.provider)}, ${account.source_name})`;
+  `${accountLabel(account)} (${providerLabel(account.provider)}, ${redact(account.source_name)})`;
 
 export type KeyLabel = { text: string; provider?: string; };
 
@@ -182,7 +182,7 @@ export const labelKey = (dimension: FilterDimension | "session", key: string, di
   }
 
   if (dimension === "source") {
-    return { text: dimensions?.sources.find(candidate => candidate.source_id === key)?.name ?? key };
+    return { text: redact(dimensions?.sources.find(candidate => candidate.source_id === key)?.name ?? key) };
   }
 
   return { text: dimension === "session" ? redact(key) : key };

@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 
 import type { Source } from "../api/sources";
 import { formatExact, formatMoment, formatOptionalMoment } from "../domain/format";
+import { redact } from "../domain/privacy";
 import type { CollectorStatus } from "../domain/source";
 import { collectorStatus, collectorStatusLabel, SOURCE_KIND_LABELS } from "../domain/source";
 
@@ -26,14 +27,14 @@ const SourceRow = (properties: { source: Source; isSelected: boolean; onSelect: 
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
       <div class="min-w-48 flex-1">
         <p class="text-sm font-medium text-slate-900 dark:text-slate-100">
-          {properties.source.name}
-          <span class="ml-2 font-mono text-xs font-normal text-slate-500 dark:text-slate-500">{properties.source.key}</span>
+          {redact(properties.source.name)}
+          <span class="ml-2 font-mono text-xs font-normal text-slate-500 dark:text-slate-500">{redact(properties.source.key)}</span>
           <Show when={!properties.source.enabled}>
             <span class="ml-2 text-xs font-normal text-amber-700 dark:text-amber-400">disabled</span>
           </Show>
         </p>
         <p class="truncate text-xs text-slate-500 dark:text-slate-500">
-          {`${SOURCE_KIND_LABELS[properties.source.kind]} at ${properties.source.base_url}`}
+          {`${SOURCE_KIND_LABELS[properties.source.kind]} at ${redact(properties.source.base_url)}`}
         </p>
       </div>
       <CollectorBadge status={collectorStatus(properties.source.collector)} />
@@ -71,7 +72,7 @@ const SourceRow = (properties: { source: Source; isSelected: boolean; onSelect: 
             {lastError => (
               <>
                 <dt class={TERM}>Last error</dt>
-                <dd class="wrap-break-word text-red-600 sm:col-span-5 dark:text-red-400">{lastError()}</dd>
+                <dd class="wrap-break-word text-red-600 sm:col-span-5 dark:text-red-400">{redact(lastError())}</dd>
               </>
             )}
           </Show>

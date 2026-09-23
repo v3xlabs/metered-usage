@@ -18,10 +18,10 @@ export const isUnlabelled = (account: AccountSummary): boolean =>
   account.display_name === undefined && account.label === undefined;
 
 export const accountText = (account: AccountSummary, isSourceShown: boolean): string =>
-  `${accountLabel(account)} (${providerLabel(account.provider)}${isSourceShown ? `, ${account.source_name}` : ""})`;
+  `${accountLabel(account)} (${providerLabel(account.provider)}${isSourceShown ? `, ${redact(account.source_name)}` : ""})`;
 
 export const accountDescription = (account: AccountSummary): string =>
-  `${accountLabel(account)}, ${providerLabel(account.provider)} on ${account.source_name}, ${AUTH_KIND_LABELS[account.auth_kind]}`;
+  `${accountLabel(account)}, ${providerLabel(account.provider)} on ${redact(account.source_name)}, ${AUTH_KIND_LABELS[account.auth_kind]}`;
 
 // Compares the stored names, as a redacted label would make every account read alike.
 const nameOf = (account: AccountSummary): string =>

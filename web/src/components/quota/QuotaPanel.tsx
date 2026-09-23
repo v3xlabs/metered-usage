@@ -7,6 +7,7 @@ import type { AccountHealthStrip } from "../../api/accountHealth";
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
 import { groupBySource } from "../../domain/account";
+import { redact } from "../../domain/privacy";
 import { formatAge, latestMoment } from "../../domain/quota";
 import type { SegmentOption } from "../analytics/Segmented";
 import { Segmented } from "../analytics/Segmented";
@@ -49,8 +50,8 @@ const QuotaGroups = (properties: GroupsProperties & { health: Accessor<AccountHe
     <div class="space-y-4">
       <For each={groupBySource(properties.accounts, entry => entry.account)}>
         {group => (
-          <section class="space-y-2" aria-label={`Quota for ${group.sourceName}`}>
-            <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group.sourceName}</h3>
+          <section class="space-y-2" aria-label={`Quota for ${redact(group.sourceName)}`}>
+            <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group.sourceName)}</h3>
             <ul class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               <For each={group.entries}>
                 {entry => (
@@ -214,7 +215,7 @@ export const QuotaPanel = () => {
                 role="status"
                 class={["min-h-4 text-right text-xs", notice()?.tone === "error" ? "text-red-600 dark:text-red-400" : "text-slate-600 dark:text-slate-400"]}
               >
-                {notice()?.text ?? ""}
+                {notice()?.tone === "error" ? redact(notice()?.text ?? "") : notice()?.text ?? ""}
               </p>
             </div>
           </Loading>
@@ -225,7 +226,7 @@ export const QuotaPanel = () => {
           <Show when={rereadFailure()}>
             {message => (
               <p role="status" class="text-sm text-amber-700 dark:text-amber-400">
-                {`Showing earlier data. The last automatic re-read failed: ${message()}`}
+                {`Showing earlier data. The last automatic re-read failed: ${redact(message())}`}
               </p>
             )}
           </Show>

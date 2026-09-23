@@ -28,7 +28,7 @@ export const DeadLetterList = (properties: { deadLetters: readonly DeadLetter[];
               <p class="text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400">
                 {formatMoment(deadLetter.received_at)}
               </p>
-              <p class="min-w-0 flex-1 text-sm wrap-break-word text-red-700 dark:text-red-400">{deadLetter.error}</p>
+              <p class="min-w-0 flex-1 text-sm wrap-break-word text-red-700 dark:text-red-400">{redact(deadLetter.error)}</p>
             </div>
             <details>
               <summary class="text-xs text-slate-600 dark:text-slate-400">Payload</summary>

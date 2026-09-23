@@ -34,6 +34,7 @@ const NameView = (properties: { account: Account; isFocused: boolean; onEdit: ()
           nameButton = element;
         }}
         type="button"
+        disabled={isPrivate()}
         onClick={() => properties.onEdit()}
         class="-mx-1 flex min-w-0 rounded-control px-1 py-0.5 text-left hover:bg-raised"
       >
@@ -41,6 +42,7 @@ const NameView = (properties: { account: Account; isFocused: boolean; onEdit: ()
       </button>
       <button
         type="button"
+        disabled={isPrivate()}
         onClick={() => properties.onEdit()}
         aria-label={`Rename ${accountLabel(properties.account)}`}
         title="Rename"
@@ -75,15 +77,15 @@ const NameInput = (properties: {
           input = element;
         }}
         id={inputId}
-        type={isPrivate() ? "password" : "text"}
+        type="text"
         autocomplete="off"
-        value={draft()}
+        value={isPrivate() ? redact(draft()) : draft()}
         onInput={event => setDraft(event.currentTarget.value)}
         placeholder={properties.account.label === undefined ? "Display name" : redact(properties.account.label)}
-        readonly={properties.isSaving}
+        readonly={properties.isSaving || isPrivate()}
         aria-busy={properties.isSaving ? "true" : undefined}
         onKeyDown={(event) => {
-          if (event.key === "Enter") {
+          if (event.key === "Enter" && !isPrivate()) {
             event.preventDefault();
             properties.onCommit(event.currentTarget.value, true);
           }
@@ -92,7 +94,9 @@ const NameInput = (properties: {
             properties.onCancel();
           }
         }}
-        onBlur={event => properties.onCommit(event.currentTarget.value, false)}
+        onBlur={(event) => {
+          if (!isPrivate()) properties.onCommit(event.currentTarget.value, false);
+        }}
         class={["w-56 rounded-control bg-raised px-2 py-0.5 text-sm text-slate-900 dark:text-slate-100", properties.isSaving && "opacity-60"]}
       />
     </span>
@@ -177,7 +181,7 @@ const DisplayName = (properties: { account: Account; onChanged: () => void; }) =
         <AuthKindIcon authKind={properties.account.auth_kind} />
       </span>
       <Show when={failure()}>
-        {message => <p class="text-xs text-red-600 dark:text-red-400" role="alert">{`Rename failed: ${message()}`}</p>}
+        {message => <p class="text-xs text-red-600 dark:text-red-400" role="alert">{`Rename failed: ${redact(message())}`}</p>}
       </Show>
     </div>
   );
@@ -232,7 +236,7 @@ const DeadLetterRegion = (properties: { source: Source; }) => {
   return (
     <section class="space-y-3" aria-labelledby="dead-letters-heading">
       <h3 id="dead-letters-heading" class="text-sm font-semibold text-slate-700 dark:text-slate-300">
-        {`Dead letters for ${properties.source.name}`}
+        {`Dead letters for ${redact(properties.source.name)}`}
       </h3>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
         <Loading fallback={<RegionPending label="Loading dead letters" />}>
@@ -298,8 +302,8 @@ const AccountsSection = () => {
             <div class="space-y-4">
               <For each={groupBySource(accounts(), account => account)} keyed={group => group.sourceId}>
                 {group => (
-                  <section class="space-y-2" aria-label={`Accounts of ${group().sourceName}`}>
-                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group().sourceName}</h3>
+                  <section class="space-y-2" aria-label={`Accounts of ${redact(group().sourceName)}`}>
+                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group().sourceName)}</h3>
                     <ul class="divide-y divide-hairline overflow-hidden rounded-panel bg-surface">
                       <For each={group().entries} keyed={account => account.account_id}>
                         {account => (

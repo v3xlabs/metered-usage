@@ -7,6 +7,7 @@ import { mergeAccount } from "../api/accounts";
 import { settle } from "../api/client";
 import { accountLabel, accountText } from "../domain/account";
 import { formatExact } from "../domain/format";
+import { redact } from "../domain/privacy";
 
 const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
 
@@ -131,7 +132,7 @@ export const AccountSettings = (properties: { account: Account; candidates: read
             </Show>
           </Show>
           <Show when={failure()}>
-            {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+            {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
           </Show>
         </Popover.Content>
       </Popover.Portal>

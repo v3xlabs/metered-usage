@@ -52,13 +52,14 @@ const ConnectionIndicator = (properties: { status: StreamStatus; }) => (
 );
 
 const AccountFilter = (properties: { accountId: string | undefined; onChoose: (accountId: string | undefined) => void; }) => {
-  const options = createMemo(async () => {
-    const accounts = await listAccounts();
-    const needingSource = accountsNeedingSource(accounts);
+  const accounts = createMemo(() => listAccounts());
+  const options = createMemo(() => {
+    const list = accounts();
+    const needingSource = accountsNeedingSource(list);
 
     return [
       { value: "", label: "All accounts" },
-      ...accounts.map(account => ({ value: account.account_id, label: accountText(account, needingSource.has(account.account_id)) })),
+      ...list.map(account => ({ value: account.account_id, label: accountText(account, needingSource.has(account.account_id)) })),
     ];
   });
 
