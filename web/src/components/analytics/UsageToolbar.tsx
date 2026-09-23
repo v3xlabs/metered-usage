@@ -116,6 +116,7 @@ export const UsageToolbar = (properties: {
             <For each={FILTER_DIMENSIONS}>
               {dimension => (
                 <FilterPicker
+                  dimension={dimension}
                   label={DIMENSION_LABELS[dimension]}
                   options={optionsFor(dimension, properties.dimensions)}
                   selected={properties.filters[dimension]}

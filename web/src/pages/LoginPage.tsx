@@ -2,6 +2,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { createSignal, Show } from "solid-js";
 
 import { returnPath, signIn } from "../api/session";
+import { redact } from "../domain/privacy";
 
 export const LoginPage = () => {
   const [searchParameters] = useSearchParams<{ next: string; }>();
@@ -46,7 +47,7 @@ export const LoginPage = () => {
         />
       </div>
       <Show when={failure()}>
-        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
       <button
         type="submit"

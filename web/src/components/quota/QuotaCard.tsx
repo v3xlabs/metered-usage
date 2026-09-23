@@ -7,6 +7,7 @@ import type { QuotaAccount, QuotaWindow } from "../../api/quota";
 import { refreshQuota } from "../../api/quota";
 import { accountDescription, accountLabel, isUnlabelled } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
+import { redact } from "../../domain/privacy";
 import type { QuotaLevel } from "../../domain/quota";
 import { formatAge, formatCountdown, formatWindowAmount, isBehind, quotaLevel, remainingPercent } from "../../domain/quota";
 import { AuthKindIcon } from "../AccountName";
@@ -288,7 +289,7 @@ export const QuotaCard = (properties: {
         {health => <HealthStrip accountId={properties.entry.account.account_id} strip={health()} />}
       </Show>
       <Show when={failure()}>
-        {message => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
     </li>
   );

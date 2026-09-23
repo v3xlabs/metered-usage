@@ -10,6 +10,7 @@ import { RegionFailure, RegionPending } from "../components/Region";
 import { localInstant } from "../domain/dateInput";
 import { formatExact } from "../domain/format";
 import { PRICE_ORIGIN_LABELS, PRICE_ORIGINS } from "../domain/price";
+import { redact } from "../domain/privacy";
 
 const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
 const FIELD = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
@@ -59,13 +60,13 @@ const SyncControl = (properties: { onSynced: () => void; }) => {
           <div class="text-xs text-slate-600 dark:text-slate-300" role="status">
             <p>{`${formatExact(synced().inserted)} inserted, ${formatExact(synced().unchanged)} unchanged`}</p>
             <Show when={synced().failed_sources.length > 0}>
-              <p class="text-red-600 dark:text-red-400">{`Failed sources: ${synced().failed_sources.join(", ")}`}</p>
+              <p class="text-red-600 dark:text-red-400">{`Failed sources: ${synced().failed_sources.map(redact).join(", ")}`}</p>
             </Show>
           </div>
         )}
       </Show>
       <Show when={failure()}>
-        {message => <p class={FAILURE_TEXT} role="alert">{message()}</p>}
+        {message => <p class={FAILURE_TEXT} role="alert">{redact(message())}</p>}
       </Show>
     </div>
   );
@@ -166,7 +167,7 @@ const RepriceControl = () => {
         {report => <p class="text-xs text-slate-600 dark:text-slate-300" role="status">{`${formatExact(report().count)} events repriced`}</p>}
       </Show>
       <Show when={failure()}>
-        {message => <p class={FAILURE_TEXT} role="alert">{message()}</p>}
+        {message => <p class={FAILURE_TEXT} role="alert">{redact(message())}</p>}
       </Show>
     </div>
   );

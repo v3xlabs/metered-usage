@@ -3,6 +3,7 @@ import { createSignal, For, Show } from "solid-js";
 import type { PriceInput } from "../api/prices";
 import { createPrice } from "../api/prices";
 import { localInstant } from "../domain/dateInput";
+import { redact } from "../domain/privacy";
 
 const FIELD = "w-full rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
 const FIELD_LABEL = "block text-xs font-medium text-slate-600 dark:text-slate-400";
@@ -137,7 +138,7 @@ export const ManualPriceForm = (properties: { onCreated: () => void; }) => {
         </div>
       </div>
       <Show when={failure()}>
-        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{message()}</p>}
+        {message => <p class="text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
     </form>
   );

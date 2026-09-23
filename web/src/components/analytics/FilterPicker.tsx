@@ -1,10 +1,13 @@
 import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
 
+import type { FilterDimension } from "../../api/analytics";
+import { labelKey } from "../../domain/analytics";
 import { ProviderIcon } from "../ProviderIcon";
 
 export type PickerOption = { value: string; label: string; provider?: string | undefined; };
 
 export const FilterPicker = (properties: {
+  dimension: FilterDimension;
   label: string;
   options: readonly PickerOption[];
   selected: readonly string[];
@@ -30,9 +33,11 @@ export const FilterPicker = (properties: {
     if (count === 0) return "All";
 
     if (count === 1) {
-      const [only] = properties.selected;
+      const only = properties.selected[0];
 
-      return properties.options.find(option => option.value === only)?.label ?? only;
+      if (only === undefined) return "All";
+
+      return properties.options.find(option => option.value === only)?.label ?? labelKey(properties.dimension, only, undefined).text;
     }
 
     return `${count} selected`;

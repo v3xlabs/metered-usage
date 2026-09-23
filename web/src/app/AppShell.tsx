@@ -8,7 +8,9 @@ import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js"
 import { LOGIN_PATH } from "../api/client";
 import { fetchHealth } from "../api/health";
 import { signOut } from "../api/session";
+import { PrivacyToggle } from "../components/PrivacyToggle";
 import { ThemeToggle } from "../components/ThemeToggle";
+import { redact } from "../domain/privacy";
 import { ANALYTICS_PAGES } from "./analyticsPages";
 
 const NAV_ITEM = "rounded-control px-2 py-1 text-sm hover:bg-raised hover:text-slate-900 dark:hover:text-slate-100";
@@ -86,7 +88,7 @@ const SignOutButton = () => {
   return (
     <>
       <Show when={failure()}>
-        {message => <span class="text-xs text-red-600 dark:text-red-400" role="alert">{message()}</span>}
+        {message => <span class="text-xs text-red-600 dark:text-red-400" role="alert">{redact(message())}</span>}
       </Show>
       <button
         type="button"
@@ -133,6 +135,7 @@ export const AppShell = (properties: { children?: JSX.Element; }) => {
           </nav>
           <div class="flex shrink-0 items-center gap-3">
             <HealthBadge />
+            <PrivacyToggle />
             <ThemeToggle />
             <Show when={isSignedInView()}>
               <SignOutButton />

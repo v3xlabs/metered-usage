@@ -3,6 +3,7 @@ import { Match, Show, Switch } from "solid-js";
 
 import type { AccountSummary, AuthKind } from "../api/accounts";
 import { accountDescription, accountLabel, AUTH_KIND_LABELS, isUnlabelled } from "../domain/account";
+import { redact } from "../domain/privacy";
 import { ProviderIcon } from "./ProviderIcon";
 
 export const AuthKindIcon = (properties: { authKind: AuthKind; }) => (
@@ -41,7 +42,7 @@ export const AccountName = (properties: { account: AccountSummary; isSourceShown
       {accountLabel(properties.account)}
     </span>
     <Show when={properties.isSourceShown}>
-      <span class="shrink-0 text-slate-500 dark:text-slate-400">{properties.account.source_name}</span>
+      <span class="shrink-0 text-slate-500 dark:text-slate-400">{redact(properties.account.source_name)}</span>
     </Show>
   </span>
 );

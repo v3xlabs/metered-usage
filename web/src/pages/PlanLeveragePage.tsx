@@ -6,6 +6,7 @@ import { listPlans } from "../api/plans";
 import { AccountPlans } from "../components/AccountPlans";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { groupBySource } from "../domain/account";
+import { redact } from "../domain/privacy";
 
 export const PlanLeveragePage = () => {
   const accounts = createMemo(() => listAccounts());
@@ -42,8 +43,8 @@ export const PlanLeveragePage = () => {
             <div class="space-y-6">
               <For each={groups()}>
                 {group => (
-                  <section class="space-y-2" aria-label={`Plans of ${group.sourceName}`}>
-                    <h2 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{group.sourceName}</h2>
+                  <section class="space-y-2" aria-label={`Plans of ${redact(group.sourceName)}`}>
+                    <h2 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group.sourceName)}</h2>
                     <ul class="space-y-3">
                       <For each={group.entries}>
                         {account => (

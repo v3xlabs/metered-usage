@@ -5,6 +5,7 @@ import { fetchSessions } from "../../api/analytics";
 import type { CostBasis, Measure, TokenKind } from "../../domain/analytics";
 import { accountName, costOf, measureOf, rankByOf, tokensOf } from "../../domain/analytics";
 import { formatCompact, formatMoment, formatUsd } from "../../domain/format";
+import { redact } from "../../domain/privacy";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
 
@@ -50,8 +51,8 @@ export const SessionsPanel = (properties: {
                 <For each={ranked()}>
                   {session => (
                     <tr class="hover:bg-raised">
-                      <td class={[CELL, "font-mono text-xs"]} title={session.session_id}>
-                        {session.session_id.length > SESSION_ID_LENGTH ? `${session.session_id.slice(0, SESSION_ID_LENGTH)}...` : session.session_id}
+                      <td class={[CELL, "font-mono text-xs"]} title={redact(session.session_id)}>
+                        {redact(session.session_id.length > SESSION_ID_LENGTH ? `${session.session_id.slice(0, SESSION_ID_LENGTH)}...` : session.session_id)}
                       </td>
                       <td class={CELL}>{session.harness ?? "Unknown"}</td>
                       <td class={[CELL, "max-w-56"]}>
