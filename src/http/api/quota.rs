@@ -147,6 +147,10 @@ pub struct QuotaWindowOutput {
     /// When the provider said the window resets.
     resets_at: Option<String>,
     observed_at: String,
+    /// Share of the window estimated used by now: `used_fraction` plus what this service
+    /// metered on the account since `observed_at`. Absent when that usage cannot be related
+    /// to the window, or once the window has reset.
+    estimated_used_fraction: Option<f64>,
 }
 
 impl From<QuotaWindow> for QuotaWindowOutput {
@@ -161,6 +165,7 @@ impl From<QuotaWindow> for QuotaWindowOutput {
             window_seconds: window.window_seconds,
             resets_at: window.resets_at.map(|at| at.0.to_string()),
             observed_at: window.observed_at.to_string(),
+            estimated_used_fraction: window.estimated_used_fraction,
         }
     }
 }

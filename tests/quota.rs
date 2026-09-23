@@ -1,8 +1,10 @@
 use std::sync::{Arc, Mutex};
 
+use jiff::{SignedDuration, Timestamp};
 use metered_usage::app::AppState;
 use metered_usage::config::Config;
 use metered_usage::database::Database;
+use metered_usage::database::codec::StoredTimestamp;
 use metered_usage::http::auth::Token;
 use metered_usage::source::Source;
 use poem::http::{StatusCode, header};
@@ -442,6 +444,105 @@ async fn a_second_refresh_replaces_every_window() {
         .map(|window| window["window_key"].as_str().expect("a key").to_owned())
         .collect::<Vec<_>>();
     assert_eq!(keys, ["five-hour", "seven-day"]);
+}
+
+#[tokio::test]
+async fn an_estimate_adds_what_was_metered_since_the_observation() {
+    let calls = Calls::default();
+    let (client, state) = service(&calls).await.expect("a service");
+    client
+        .post("/api/quota/sync")
+        .body_json(&json!({}))
+        .send()
+        .await
+        .assert_status_is_ok();
+    let now = Timestamp::now();
+    let at =
+        |minutes: i64| StoredTimestamp::from(now + SignedDuration::from_mins(minutes)).to_string();
+    let pool = &state.database.pool;
+    for (upstream_key, key, used_fraction, used_value, limit_value, unit, observed, resets) in [
+        ("a1", "five-hour", 0.2, None, None, None, -60, 60),
+        ("a1", "reset", 0.5, None, None, None, -120, -1),
+        ("a1", "untouched", 0.0, None, None, None, -60, 60),
+        (
+            "a4",
+            "limit-0",
+            0.1,
+            Some(10.0),
+            Some(100.0),
+            Some("requests"),
+            -60,
+            60,
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO quota_window (account_id, window_key, label, used_fraction, \
+             used_value, limit_value, unit, window_seconds, resets_at, observed_at) \
+             SELECT account_id, ?, ?, ?, ?, ?, ?, 18000, ?, ? FROM account \
+             WHERE upstream_key = ?",
+        )
+        .bind(key)
+        .bind(key)
+        .bind(used_fraction)
+        .bind(used_value)
+        .bind(limit_value)
+        .bind(unit)
+        .bind(at(resets))
+        .bind(at(observed))
+        .bind(upstream_key)
+        .execute(pool)
+        .await
+        .expect("a window");
+    }
+    // The five-hour window opened four hours ago, so the event of five hours ago is not in it.
+    for (index, (upstream_key, occurred, failed, cost)) in [
+        ("a1", -300, false, 100.0),
+        ("a1", -120, false, 1.0),
+        ("a1", -30, false, 0.5),
+        ("a4", -120, false, 0.0),
+        ("a4", -30, false, 0.0),
+        ("a4", -20, false, 0.0),
+        ("a4", -10, true, 0.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO usage_event (source_id, account_id, record_hash, upstream_id, \
+             occurred_at, provider, model, endpoint, streamed, status_code, failed, \
+             list_cost_usd) \
+             SELECT source_id, account_id, ?, ?, ?, provider, 'model', '/v1/messages', 0, ?, ?, ? \
+             FROM account WHERE upstream_key = ?",
+        )
+        .bind(format!("hash-{index}"))
+        .bind(format!("request-{index}"))
+        .bind(at(occurred))
+        .bind(if failed { 429 } else { 200 })
+        .bind(failed)
+        .bind(cost)
+        .bind(upstream_key)
+        .execute(pool)
+        .await
+        .expect("an event");
+    }
+
+    let listed = client
+        .get("/api/quota")
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize::<Value>();
+    let claude = by_provider(&listed, "claude");
+    let estimate = |window: &Value| window["estimated_used_fraction"].as_f64();
+
+    let five_hour = estimate(window(claude, "five-hour")).expect("a five-hour estimate");
+    assert!((five_hour - 0.3).abs() < 1e-9, "estimated {five_hour}");
+    assert_eq!(estimate(window(claude, "reset")), None);
+    assert_eq!(estimate(window(claude, "untouched")), None);
+    let kimi = estimate(window(by_provider(&listed, "kimi"), "limit-0")).expect("a kimi estimate");
+    assert!((kimi - 0.12).abs() < 1e-9, "estimated {kimi}");
 }
 
 #[tokio::test]

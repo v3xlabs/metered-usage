@@ -110,11 +110,13 @@ impl From<Map<String, Value>> for Catalog {
                 .flatten()
                 .filter_map(Value::as_object)
             {
+                // LiteLLM picks the tier whose range holds `start < input <= end`.
                 let Some(min_input_tokens) = tier
                     .get("range")
                     .and_then(Value::as_array)
                     .and_then(|range| range.first())
                     .and_then(tokens)
+                    .map(|start| start + i64::from(start > 0))
                 else {
                     continue;
                 };

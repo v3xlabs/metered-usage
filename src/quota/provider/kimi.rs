@@ -7,7 +7,7 @@ use crate::quota::management::{ApiCall, Management};
 use crate::quota::provider::{
     Observation, RefreshError, after_seconds, answer, field, instant, integer, number, text,
 };
-use crate::quota::window::NewWindow;
+use crate::quota::window::{NewWindow, REQUESTS};
 
 const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
 const HOUR: i64 = 60 * 60;
@@ -142,7 +142,7 @@ fn row(
         used_fraction: (limit > 0.0).then(|| used / limit),
         used_value: Some(used),
         limit_value: Some(limit),
-        unit: Some("requests"),
+        unit: Some(REQUESTS),
         window_seconds,
         resets_at,
         label,

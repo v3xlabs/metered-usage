@@ -504,6 +504,53 @@ async fn the_long_context_price_starts_above_its_threshold() -> Result<(), Failu
 }
 
 #[tokio::test]
+async fn a_threshold_bound_is_inclusive_only_where_litellm_says() -> Result<(), Failure> {
+    let harness = harness().await?;
+    {
+        let mut map = harness.maps.public.lock().await;
+        map["grok-4"] = json!({
+            "litellm_provider": "xai",
+            "input_cost_per_token": 3e-06,
+            "output_cost_per_token": 1.5e-05,
+            "input_cost_per_token_above_200k_tokens": 6e-06,
+            "output_cost_per_token_above_200k_tokens": 3e-05,
+        });
+        map["qwen-plus"] = json!({
+            "litellm_provider": "dashscope",
+            "tiered_pricing": [
+                { "input_cost_per_token": 4e-07, "output_cost_per_token": 1.2e-06, "range": [0, 256_000.0] },
+                { "input_cost_per_token": 1.2e-06, "output_cost_per_token": 3.6e-06, "range": [256_000.0, 1_000_000.0] },
+            ],
+        });
+    }
+    harness.sync().await?;
+    let priced = |upstream_id: &str, model: &str, input: i64| {
+        let mut event = request(upstream_id, at("2025-06-01T00:00:00Z")?, input, 0);
+        event.model = model.to_owned();
+        Ok::<_, Failure>(event)
+    };
+    harness
+        .store(
+            "proxy",
+            vec![
+                priced("grok-at", "grok-4", 200_000)?,
+                priced("qwen-at", "qwen-plus", 256_000)?,
+                priced("qwen-above", "qwen-plus", 256_001)?,
+            ],
+        )
+        .await?;
+    harness.fill().await?;
+
+    // xAI bills the long-context rate from the threshold itself: 200 000 at 6.
+    close(harness.cost("grok-at").await?.list_cost_usd, 1.2);
+    // A tier range holds its end and not its start: 256 000 at 0.40, 256 001 at 1.20.
+    close(harness.cost("qwen-at").await?.list_cost_usd, 0.1024);
+    close(harness.cost("qwen-above").await?.list_cost_usd, 0.307_201_2);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_rate_a_tier_or_threshold_leaves_out_falls_back_as_litellm_does() -> Result<(), Failure> {
     let harness = harness().await?;
     harness.maps.public.lock().await["gpt-5.4"] = json!({

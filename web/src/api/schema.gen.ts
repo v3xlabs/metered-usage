@@ -895,6 +895,13 @@ export interface components {
             /** @description When the provider said the window resets. */
             resets_at?: string;
             observed_at: string;
+            /**
+             * Format: double
+             * @description Share of the window estimated used by now: `used_fraction` plus what this service
+             *     metered on the account since `observed_at`. Absent when that usage cannot be related
+             *     to the window, or once the window has reset.
+             */
+            estimated_used_fraction?: number;
         };
         /** @enum {string} */
         RankBy: "list_cost_usd" | "billed_cost_usd" | "total_tokens" | "requests";

@@ -14,11 +14,13 @@ import { HealthStrip } from "../HealthStrip";
 import { IconButton } from "../IconButton";
 import { ProviderIcon } from "../ProviderIcon";
 
-const LEVEL_TONES: Record<QuotaLevel, { fill: string; text: string; }> = {
-  comfortable: { fill: "bg-emerald-500", text: "text-slate-900 dark:text-slate-100" },
-  low: { fill: "bg-amber-500", text: "text-amber-700 dark:text-amber-400" },
-  exhausted: { fill: "bg-red-500", text: "text-red-600 dark:text-red-400" },
+const LEVEL_TONES: Record<QuotaLevel, { fill: string; text: string; dash: string; }> = {
+  comfortable: { fill: "bg-emerald-500", text: "text-slate-900 dark:text-slate-100", dash: "text-emerald-500" },
+  low: { fill: "bg-amber-500", text: "text-amber-700 dark:text-amber-400", dash: "text-amber-500" },
+  exhausted: { fill: "bg-red-500", text: "text-red-600 dark:text-red-400", dash: "text-red-500" },
 };
+
+const DASHES = "repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 5px)";
 
 const StatusMark = (properties: { tone: "neutral" | "warning" | "danger"; text: string; }) => (
   <span
@@ -57,15 +59,40 @@ const WindowText = (properties: { window: QuotaWindow; nowMs: number; }) => (
   </div>
 );
 
+// The solid bar is what the provider last reported. The dashed tail is the part of it the
+// usage metered since then is estimated to have spent. The estimate is wrapped because an
+// exhausted window leaves zero percent, which must still draw.
 const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; nowMs: number; }) => {
   const percentLeft = createMemo(() => remainingPercent(properties.usedFraction));
+  const estimate = createMemo(() => {
+    const estimated = properties.window.estimated_used_fraction;
+
+    if (estimated === undefined || estimated <= properties.usedFraction) return undefined;
+
+    return { percentLeft: remainingPercent(estimated) };
+  });
   const tone = createMemo(() => LEVEL_TONES[quotaLevel(percentLeft())]);
+  const valueText = createMemo(() => {
+    const reported = `${Math.round(percentLeft())}% left`;
+    const estimated = estimate();
+
+    return estimated === undefined ? reported : `${reported}, about ${Math.round(estimated.percentLeft)}% left now`;
+  });
 
   return (
     <li class="space-y-1">
       <div class="flex items-baseline justify-between gap-2 text-xs">
         <span class="truncate text-slate-700 dark:text-slate-300">{properties.window.label}</span>
-        <span class={["shrink-0 font-medium tabular-nums", tone().text]}>{`${Math.round(percentLeft())}% left`}</span>
+        <span class="flex shrink-0 gap-2 tabular-nums">
+          <Show when={estimate()}>
+            {estimated => (
+              <span class="text-slate-500 dark:text-slate-400" title="Estimated from the usage metered since the last refresh">
+                {`≈${Math.round(estimated().percentLeft)}% now`}
+              </span>
+            )}
+          </Show>
+          <span class={["font-medium", tone().text]}>{`${Math.round(percentLeft())}% left`}</span>
+        </span>
       </div>
       <div
         role="meter"
@@ -73,10 +100,22 @@ const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; no
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percentLeft()}
-        aria-valuetext={`${Math.round(percentLeft())}% left`}
-        class="h-1.5 overflow-hidden rounded-full bg-raised"
+        aria-valuetext={valueText()}
+        class="relative h-1.5 overflow-hidden rounded-full bg-raised"
       >
-        <div class={["h-full rounded-full", tone().fill]} style={{ width: `${percentLeft()}%` }} />
+        <div class={["h-full rounded-full", tone().fill]} style={{ width: `${estimate()?.percentLeft ?? percentLeft()}%` }} />
+        <Show when={estimate()}>
+          {estimated => (
+            <div
+              class={["absolute inset-y-0", tone().dash]}
+              style={{
+                "left": `${estimated().percentLeft}%`,
+                "width": `${percentLeft() - estimated().percentLeft}%`,
+                "background-image": DASHES,
+              }}
+            />
+          )}
+        </Show>
       </div>
       <WindowText window={properties.window} nowMs={properties.nowMs} />
     </li>
