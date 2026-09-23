@@ -73,6 +73,7 @@ struct Metrics {
     unpriced_requests: i64,
     avg_latency_ms: Option<f64>,
     avg_ttft_ms: Option<f64>,
+    output_tokens_per_second: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +188,18 @@ struct SourceList {
 struct ListedSource {
     source_id: String,
     key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestSamples {
+    requests: i64,
+    samples: Vec<RequestSample>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestSample {
+    occurred_at: String,
+    model: String,
 }
 
 /// One request, as `request` below describes it before the defaults are filled in.
@@ -465,6 +478,11 @@ async fn a_summary_reports_every_measure_of_the_window() -> Result<(), Failure> 
     assert_eq!(metrics.unpriced_requests, 1);
     close(metrics.avg_latency_ms.ok_or("a latency")?, 2000.0);
     close(metrics.avg_ttft_ms.ok_or("a time to first token")?, 200.0);
+    // a generated 100 000 in the 800 ms after its first token, b nothing in 3000 ms.
+    close(
+        metrics.output_tokens_per_second.ok_or("an output speed")?,
+        100_000.0 * 1000.0 / 3800.0,
+    );
 
     assert_eq!(summary.range_days, 7);
     assert_eq!(summary.active_days, 2);
@@ -847,6 +865,63 @@ async fn an_id_that_names_nothing_is_refused() -> Result<(), Failure> {
         .send()
         .await;
     too_long.assert_status(StatusCode::BAD_REQUEST);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn request_samples_share_the_limit_between_models() -> Result<(), Failure> {
+    let harness = harness().await?;
+    let codex = [
+        "2026-03-05T00:00:00Z",
+        "2026-03-05T01:00:00Z",
+        "2026-03-05T02:00:00Z",
+        "2026-03-05T03:00:00Z",
+        "2026-03-05T04:00:00Z",
+        "2026-03-05T05:00:00Z",
+        "2026-03-05T06:00:00Z",
+        "2026-03-05T07:00:00Z",
+        "2026-03-05T08:00:00Z",
+        "2026-03-05T09:00:00Z",
+    ]
+    .map(|at| Request {
+        upstream_id: at,
+        at,
+        model: CODEX,
+        provider: "codex",
+        account: ("b1", AuthKind::ApiKey),
+        harness: None,
+        session: None,
+        input: 1000,
+        cache_read: 0,
+        cache_write: 0,
+        output: 100,
+        latency_ms: Some(500),
+        ttft_ms: None,
+        failed: false,
+    });
+    harness.ingest("beta", &codex).await?;
+
+    let sampled = harness
+        .get::<RequestSamples>(&format!("/api/analytics/requests?limit=4&{WEEK}"))
+        .await;
+
+    // Sonnet's a and b are timed; c and e have no latency and d failed.
+    assert_eq!(sampled.requests, 12);
+    let points = sampled
+        .samples
+        .iter()
+        .map(|sample| (sample.model.as_str(), sample.occurred_at.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        points,
+        [
+            (SONNET, "2026-03-02T10:00:00Z"),
+            (SONNET, "2026-03-02T12:00:00Z"),
+            (CODEX, "2026-03-05T00:00:00Z"),
+            (CODEX, "2026-03-05T05:00:00Z"),
+        ]
+    );
 
     Ok(())
 }

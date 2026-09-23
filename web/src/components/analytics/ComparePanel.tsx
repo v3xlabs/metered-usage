@@ -4,7 +4,7 @@ import type { AnalyticsScope, Dimensions, FilterDimension, Summary, UsageMetrics
 import { fetchSummary } from "../../api/analytics";
 import type { CostBasis, KeyLabel, TokenKind } from "../../domain/analytics";
 import { cacheHitRate, costOf, DIMENSION_LABELS, dimensionKeys, FILTER_DIMENSIONS, labelKey, tokensOf } from "../../domain/analytics";
-import { formatCompact, formatExact, formatLatency, formatUsd } from "../../domain/format";
+import { formatCompact, formatExact, formatLatency, formatSpeed, formatUsd } from "../../domain/format";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
 
@@ -102,6 +102,7 @@ const Comparison = (properties: {
     { label: "Tokens per request", value: metrics => perRequest(metrics, tokensOf(metrics, properties.kinds)), format: formatCompact },
     { label: "Average latency", value: metrics => metrics.avg_latency_ms, format: formatLatency },
     { label: "Average time to first token", value: metrics => metrics.avg_ttft_ms, format: formatLatency },
+    { label: "Output speed", value: metrics => metrics.output_tokens_per_second, format: formatSpeed },
   ]);
 
   return (

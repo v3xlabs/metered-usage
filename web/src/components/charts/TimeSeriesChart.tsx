@@ -7,7 +7,7 @@ import { scalePoint } from "@tanstack/charts/scales/point";
 import { tooltip } from "@tanstack/charts/tooltip";
 import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
 
-import { formatCompact, formatExact, formatUsd, formatUsdCompact } from "../../domain/format";
+import { formatCompact, formatExact, formatLatency, formatLatencyTick, formatSpeed, formatUsd, formatUsdCompact } from "../../domain/format";
 
 // Mid-tone hues hold their contrast on both the white and the black canvas, so one palette
 // serves both themes.
@@ -60,7 +60,7 @@ export const colorFor = (key: string): string => {
   return color;
 };
 
-export type ChartFormat = "usd" | "tokens" | "percent" | "count";
+export type ChartFormat = "usd" | "tokens" | "percent" | "count" | "latency" | "speed";
 
 export type SeriesPoint = { start: string; key: string; value: number; };
 
@@ -73,6 +73,8 @@ export const FORMATTERS: Record<ChartFormat, { tick: (value: number) => string; 
   tokens: { tick: formatCompact, value: value => `${formatExact(value)} tokens` },
   percent: { tick: formatPercent, value: formatPercent },
   count: { tick: formatCompact, value: formatExact },
+  latency: { tick: formatLatencyTick, value: formatLatency },
+  speed: { tick: formatCompact, value: formatSpeed },
 };
 
 type RankedKey = { key: string; total: number; };
@@ -293,7 +295,10 @@ export const TimeSeriesChart = (properties: {
             <li class="flex min-w-0 items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
               <span class="size-2.5 shrink-0 rounded-xs" style={{ "background-color": colorOf(entry.key) }} />
               <span class="max-w-56 truncate">{labelOf(entry.key)}</span>
-              <span class="text-slate-500 tabular-nums dark:text-slate-400">{FORMATTERS[properties.format].tick(entry.total)}</span>
+              {/* A line plots an average, whose sum over the buckets means nothing. */}
+              <Show when={properties.mode !== "line"}>
+                <span class="text-slate-500 tabular-nums dark:text-slate-400">{FORMATTERS[properties.format].tick(entry.total)}</span>
+              </Show>
             </li>
           )}
         </For>
