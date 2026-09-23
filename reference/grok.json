@@ -1,0 +1,105 @@
+{
+    "timestamp": "2026-09-18T03:23:59.170925504+02:00",
+    "latency_ms": 349,
+    "ttft_ms": 348,
+    "source": "==REDACTED==",
+    "auth_index": "==REDACTED==",
+    "access_token_sha256": "==REDACTED==",
+    "client_ip": "100.127.0.127",
+    "x_forwarded_for": "100.127.0.103",
+    "user_agent": "omp/18.2.1",
+    "tokens": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "cached_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_read_tokens_present": true,
+        "cache_creation_tokens": 0,
+        "total_tokens": 0
+    },
+    "failed": true,
+    "generate": true,
+    "stream": true,
+    "fail": {
+        "status_code": 402,
+        "body": "{\"code\":\"personal-team-blocked:spending-limit\",\"error\":\"You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok.\"}"
+    },
+    "response_headers": {
+        "Access-Control-Allow-Origin": [
+            "*"
+        ],
+        "Access-Control-Expose-Headers": [
+            "*"
+        ],
+        "Alt-Svc": [
+            "==REDACTED=="
+        ],
+        "Cf-Cache-Status": [
+            "DYNAMIC"
+        ],
+        "Cf-Ray": [
+            "==REDACTED=="
+        ],
+        "Content-Length": [
+            "198"
+        ],
+        "Content-Type": [
+            "application/json"
+        ],
+        "Date": [
+            "==REDACTED=="
+        ],
+        "Server": [
+            "cloudflare"
+        ],
+        "Set-Cookie": [
+            "==REDACTED=="
+        ],
+        "Strict-Transport-Security": [
+            "max-age=31536000; includeSubDomains"
+        ],
+        "Vary": [
+            "origin, access-control-request-method, access-control-request-headers",
+            "origin, access-control-request-method, access-control-request-headers"
+        ],
+        "X-Data-Retention": [
+            "zdr"
+        ],
+        "X-Should-Retry": [
+            "false"
+        ],
+        "X-Zero-Data-Retention": [
+            "true"
+        ]
+    },
+    "accounting_version": 2,
+    "token_breakdown": {
+        "schema_version": 2,
+        "quality": "complete",
+        "total_tokens": 0,
+        "input": {
+            "total_tokens": 0,
+            "uncached_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0
+        },
+        "output": {
+            "total_tokens": 0,
+            "non_reasoning_tokens": 0,
+            "reasoning_tokens": 0
+        },
+        "unclassified_tokens": 0
+    },
+    "provider": "xai",
+    "executor_type": "XAIExecutor",
+    "model": "grok-3-mini",
+    "alias": "grok-3-mini",
+    "endpoint": "POST /v1/messages",
+    "auth_type": "oauth",
+    "api_key": "==REDACTED==",
+    "request_id": "==REDACTED==",
+    "session_id": "==REDACTED==",
+    "reasoning_effort": "medium",
+    "service_tier": "auto"
+}

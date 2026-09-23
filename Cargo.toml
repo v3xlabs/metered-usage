@@ -1,0 +1,40 @@
+[package]
+name = "metered-usage"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+blake3 = "1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+jiff = { version = "0.2", features = ["serde"] }
+poem = "3.1.12"
+poem-mcpserver = { version = "0.3.1", default-features = false, features = ["streamable-http"] }
+poem-openapi = { version = "5.1.16", features = ["swagger-ui"] }
+rand = "0.9"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rust-embed = "8.12.0"
+schemars = "1.2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+thiserror = "2"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+toml = "1.1.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+poem = { version = "3.1.12", features = ["test"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "warn"
+missing_errors_doc = "allow"
+redundant_pub_crate = "warn"
+arbitrary_source_item_ordering = "deny"
+# poem-openapi rejects a non-async operation, so an operation that awaits nothing is async anyway.
+unused_async = "allow"
+unused_async_trait_impl = "allow"

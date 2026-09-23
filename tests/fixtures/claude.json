@@ -1,0 +1,89 @@
+{
+    "timestamp": "2026-01-15T10:11:12.123456789+02:00",
+    "latency_ms": 800,
+    "ttft_ms": 790,
+    "source": "==REDACTED==",
+    "auth_index": "==REDACTED==",
+    "access_token_sha256": "==REDACTED==",
+    "client_ip": "==REDACTED==",
+    "x_forwarded_for": "==REDACTED==",
+    "user_agent": "omp/1.0.0",
+    "tokens": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "reasoning_tokens": 0,
+        "cached_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_read_tokens_present": true,
+        "cache_creation_tokens": 0,
+        "total_tokens": 0
+    },
+    "failed": true,
+    "generate": true,
+    "stream": true,
+    "fail": {
+        "status_code": 403,
+        "body": "{\"error\":{\"type\":\"permission_error\",\"message\":\"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\"},\"type\":\"error\"}"
+    },
+    "response_headers": {
+        "Cf-Cache-Status": [
+            "DYNAMIC"
+        ],
+        "Cf-Ray": [
+            "==REDACTED=="
+        ],
+        "Content-Encoding": [
+            "gzip"
+        ],
+        "Content-Type": [
+            "application/json; charset=utf-8"
+        ],
+        "Date": [
+            "==REDACTED=="
+        ],
+        "Server": [
+            "cloudflare"
+        ],
+        "Set-Cookie": [
+            "==REDACTED=="
+        ],
+        "Strict-Transport-Security": [
+            "max-age=31536000; includeSubDomains"
+        ],
+        "X-Internal-Adhoc-Canary": [
+            "==REDACTED=="
+        ],
+        "X-Trace-Id": [
+            "==REDACTED=="
+        ]
+    },
+    "accounting_version": 2,
+    "token_breakdown": {
+        "schema_version": 2,
+        "quality": "complete",
+        "total_tokens": 0,
+        "input": {
+            "total_tokens": 0,
+            "uncached_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0
+        },
+        "output": {
+            "total_tokens": 0,
+            "non_reasoning_tokens": 0,
+            "reasoning_tokens": 0
+        },
+        "unclassified_tokens": 0
+    },
+    "provider": "claude",
+    "executor_type": "ClaudeExecutor",
+    "model": "kimi-k3-256k",
+    "alias": "kimi-k3-256k",
+    "endpoint": "POST /v1/messages",
+    "auth_type": "oauth",
+    "api_key": "==REDACTED==",
+    "request_id": "==REDACTED==",
+    "session_id": "==REDACTED==",
+    "reasoning_effort": "",
+    "service_tier": "auto"
+}

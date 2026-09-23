@@ -1,0 +1,91 @@
+{
+   "timestamp": "2026-09-18T03:24:17.065460192+02:00",
+   "latency_ms": 1127,
+   "ttft_ms": 902,
+   "source": "luc@v3x.email",
+   "auth_index": "==REDACTED==",
+   "access_token_sha256": "==REDACTED==",
+   "client_ip": "==REDACTED==",
+   "x_forwarded_for": "==REDACTED==",
+   "user_agent": "omp/18.2.1",
+   "tokens": {
+      "input_tokens": 20671,
+      "output_tokens": 56,
+      "reasoning_tokens": 0,
+      "cached_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_read_tokens_present": true,
+      "cache_creation_tokens": 0,
+      "total_tokens": 20727
+   },
+   "failed": false,
+   "generate": true,
+   "stream": true,
+   "fail": {
+      "status_code": 200,
+      "body": ""
+   },
+   "response_headers": {
+      "Alt-Svc": [
+         "==REDACTED=="
+      ],
+      "Content-Disposition": [
+         "attachment"
+      ],
+      "Content-Type": [
+         "text/event-stream"
+      ],
+      "Date": [
+         "Fri, 18 Sep 2026 01:24:17 GMT"
+      ],
+      "Server": [
+         "ESF"
+      ],
+      "Server-Timing": [
+         "==REDACTED=="
+      ],
+      "Vary": [
+         "Origin",
+         "X-Origin",
+         "Referer"
+      ],
+      "X-Content-Type-Options": [
+         "nosniff"
+      ],
+      "X-Frame-Options": [
+         "SAMEORIGIN"
+      ],
+      "X-Xss-Protection": [
+         "0"
+      ]
+   },
+   "accounting_version": 2,
+   "token_breakdown": {
+      "schema_version": 2,
+      "quality": "complete",
+      "total_tokens": 20727,
+      "input": {
+         "total_tokens": 20671,
+         "uncached_tokens": 20671,
+         "cache_read_tokens": 0,
+         "cache_write_tokens": 0
+      },
+      "output": {
+         "total_tokens": 56,
+         "non_reasoning_tokens": 56,
+         "reasoning_tokens": 0
+      },
+      "unclassified_tokens": 0
+   },
+   "provider": "antigravity",
+   "executor_type": "AntigravityExecutor",
+   "model": "gpt-oss-120b-medium",
+   "alias": "gpt-oss-120b-medium",
+   "endpoint": "POST /v1/messages",
+   "auth_type": "oauth",
+   "api_key": "==REDACTED==",
+   "request_id": "==REDACTED==",
+   "session_id": "==REDACTED==",
+   "reasoning_effort": "high",
+   "service_tier": "auto"
+}
