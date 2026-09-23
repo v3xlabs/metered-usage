@@ -1,5 +1,6 @@
 import type { Component } from "solid-js";
 
+import { AnalyticsModelsPage } from "../pages/AnalyticsModelsPage";
 import { AnalyticsUsagePage } from "../pages/AnalyticsUsagePage";
 import { PlanLeveragePage } from "../pages/PlanLeveragePage";
 
@@ -16,6 +17,12 @@ export const ANALYTICS_PAGES: readonly AnalyticsPage[] = [
     label: "Usage",
     description: "Cost, tokens and requests over time, by any dimension",
     component: AnalyticsUsagePage,
+  },
+  {
+    path: "/analytics/models",
+    label: "Models",
+    description: "Compare models by volume, latency, time to first token and output speed",
+    component: AnalyticsModelsPage,
   },
   {
     path: "/analytics/leverage",

@@ -1,8 +1,9 @@
 import { useSearchParams } from "@solidjs/router";
 import { createMemo, Errored, Loading } from "solid-js";
 
-import type { AnalyticsFilters, AnalyticsScope, Bucket, FilterDimension } from "../api/analytics";
-import { fetchBreakdown, fetchDimensions, fetchSummary } from "../api/analytics";
+import type { FilterDimension } from "../api/analytics";
+import { fetchBreakdown, fetchSummary } from "../api/analytics";
+import { createAnalyticsScope, listOf } from "../app/analyticsScope";
 import type { AttributionView } from "../components/analytics/AttributionPanel";
 import { AttributionPanel } from "../components/analytics/AttributionPanel";
 import { CachePanel } from "../components/analytics/CachePanel";
@@ -11,40 +12,21 @@ import { ComparePanel } from "../components/analytics/ComparePanel";
 import { CompositionPanel } from "../components/analytics/CompositionPanel";
 import type { StackMode } from "../components/analytics/OverTimePanel";
 import { OverTimePanel } from "../components/analytics/OverTimePanel";
+import { PageHeading } from "../components/analytics/PageHeading";
 import { SessionsPanel } from "../components/analytics/SessionsPanel";
 import { SummaryCards } from "../components/analytics/SummaryCards";
 import { UsageToolbar } from "../components/analytics/UsageToolbar";
 import { RegionFailure, RegionPending } from "../components/Region";
-import type { CostBasis, Measure, Metric, RangePreset, TokenKind } from "../domain/analytics";
-import {
-  autoBucket,
-  BUCKETS,
-  EMPTY_FILTERS,
-  FILTER_DIMENSIONS,
-  RANGE_PRESETS,
-  rankByOf,
-  resolveWindow,
-  TOKEN_KINDS,
-  utcOffsetMinutes,
-} from "../domain/analytics";
+import type { CostBasis, Measure, Metric, TokenKind } from "../domain/analytics";
+import { FILTER_DIMENSIONS, rankByOf, TOKEN_KINDS } from "../domain/analytics";
 
 const BREAKDOWN_LIMIT = 50;
-const DAY_LABEL = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" });
 
 type UsageSearch = {
-  range: string;
-  from: string;
-  to: string;
   metric: string;
   kinds: string[];
   basis: string;
-  model: string[];
-  provider: string[];
-  account: string[];
-  harness: string[];
-  source: string[];
   dim: string;
-  bucket: string;
   chart: string;
   view: string;
   hide: string[];
@@ -52,12 +34,6 @@ type UsageSearch = {
   left: string;
   right_dim: string;
   right: string;
-};
-
-const listOf = (value: string | string[] | undefined): readonly string[] => {
-  if (value === undefined) return [];
-
-  return typeof value === "string" ? [value] : value;
 };
 
 const sliceOf = (dimension: string | undefined, value: string | undefined): Slice | undefined => {
@@ -68,8 +44,8 @@ const sliceOf = (dimension: string | undefined, value: string | undefined): Slic
 
 export const AnalyticsUsagePage = () => {
   const [search, setSearch] = useSearchParams<UsageSearch>();
+  const analytics = createAnalyticsScope();
 
-  const range = createMemo((): RangePreset => RANGE_PRESETS.find(preset => preset === search.range) ?? "30d");
   const metric = createMemo((): Metric => (search.metric === "tokens" ? "tokens" : "cost"));
   const basis = createMemo((): CostBasis => (search.basis === "billed" ? "billed" : "list"));
   const kinds = createMemo((): readonly TokenKind[] => {
@@ -86,30 +62,9 @@ export const AnalyticsUsagePage = () => {
   const view = createMemo((): AttributionView => (search.view === "list" ? "list" : "treemap"));
   const hidden = createMemo(() => listOf(search.hide));
 
-  const usageWindow = createMemo(() => resolveWindow(range(), search.from, search.to));
-  const automaticBucket = createMemo(() => autoBucket(usageWindow().days));
-  const chosenBucket = createMemo((): Bucket | undefined => BUCKETS.find(bucket => bucket === search.bucket));
-  const bucket = createMemo(() => chosenBucket() ?? automaticBucket());
-
-  const filters = createMemo((): AnalyticsFilters => ({
-    model: listOf(search.model),
-    provider: listOf(search.provider),
-    account: listOf(search.account),
-    harness: listOf(search.harness),
-    source: listOf(search.source),
-  }));
-  const offsetMinutes = utcOffsetMinutes();
-  const scope = createMemo((): AnalyticsScope => ({
-    from: usageWindow().from,
-    to: usageWindow().to,
-    utcOffsetMinutes: offsetMinutes,
-    filters: filters(),
-  }));
-
-  const dimensions = createMemo(() => fetchDimensions({ ...scope(), filters: EMPTY_FILTERS }));
-  const summary = createMemo(() => fetchSummary(scope()));
+  const summary = createMemo(() => fetchSummary(analytics.scope()));
   const breakdown = createMemo(() => fetchBreakdown({
-    ...scope(),
+    ...analytics.scope(),
     groupBy: dimension(),
     rankBy: rankByOf(measure()),
     limit: BREAKDOWN_LIMIT,
@@ -123,32 +78,23 @@ export const AnalyticsUsagePage = () => {
 
   return (
     <div class="space-y-6">
-      <div class="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 class="text-lg font-semibold">Usage</h1>
-        <p class="text-sm text-slate-500 tabular-nums dark:text-slate-400">
-          {usageWindow().firstDay === usageWindow().lastDay
-            ? DAY_LABEL.format(new Date(`${usageWindow().firstDay}T00:00:00`))
-            : `${DAY_LABEL.format(new Date(`${usageWindow().firstDay}T00:00:00`))} to ${DAY_LABEL.format(new Date(`${usageWindow().lastDay}T00:00:00`))}`}
-        </p>
-      </div>
+      <PageHeading title="Usage" usageWindow={analytics.usageWindow()} />
       <UsageToolbar
-        range={range()}
-        firstDay={usageWindow().firstDay}
-        lastDay={usageWindow().lastDay}
+        range={analytics.range()}
+        firstDay={analytics.usageWindow().firstDay}
+        lastDay={analytics.usageWindow().lastDay}
         metric={metric()}
         kinds={kinds()}
         basis={basis()}
-        filters={filters()}
-        dimensions={dimensions()}
-        onRange={next => setSearch(next === "custom"
-          ? { range: next, from: usageWindow().firstDay, to: usageWindow().lastDay, bucket: undefined }
-          : { range: next, from: undefined, to: undefined, bucket: undefined })}
-        onCustom={(firstDay, lastDay) => setSearch({ range: "custom", from: firstDay, to: lastDay })}
+        filters={analytics.filters()}
+        dimensions={analytics.dimensions()}
+        onRange={analytics.chooseRange}
+        onCustom={analytics.chooseCustom}
         onMetric={next => setSearch({ metric: next })}
         onKinds={next => setSearch({ kinds: next.length === TOKEN_KINDS.length ? undefined : [...next] })}
         onBasis={next => setSearch({ basis: next })}
-        onFilter={(filterDimension, values) => setSearch({ [filterDimension]: values.length === 0 ? undefined : [...values] })}
-        onClear={() => setSearch({ model: undefined, provider: undefined, account: undefined, harness: undefined, source: undefined })}
+        onFilter={analytics.chooseFilter}
+        onClear={analytics.clearFilters}
       />
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
         <Loading fallback={<RegionPending label="Loading summary" />}>
@@ -161,24 +107,24 @@ export const AnalyticsUsagePage = () => {
         </Loading>
       </Errored>
       <OverTimePanel
-        scope={scope()}
+        scope={analytics.scope()}
         measure={measure()}
         format={metric() === "cost" ? "usd" : "tokens"}
         dimension={dimension()}
-        bucket={bucket()}
-        chosenBucket={chosenBucket()}
-        autoBucket={automaticBucket()}
+        bucket={analytics.bucket()}
+        chosenBucket={analytics.chosenBucket()}
+        autoBucket={analytics.automaticBucket()}
         mode={mode()}
         hidden={hidden()}
-        dimensions={dimensions()}
+        dimensions={analytics.dimensions()}
         onDimension={next => setSearch({ dim: next, hide: undefined })}
-        onBucket={next => setSearch({ bucket: next })}
+        onBucket={analytics.chooseBucket}
         onMode={next => setSearch({ chart: next === "stacked-area" ? "area" : undefined })}
         onRestore={key => setSearch({ hide: key === undefined ? undefined : hidden().filter(candidate => candidate !== key) })}
       />
       <CompositionPanel
-        scope={scope()}
-        bucket={bucket()}
+        scope={analytics.scope()}
+        bucket={analytics.bucket()}
         mode={mode()}
         metric={metric()}
       />
@@ -188,16 +134,16 @@ export const AnalyticsUsagePage = () => {
         format={metric() === "cost" ? "usd" : "tokens"}
         dimension={dimension()}
         hidden={hidden()}
-        dimensions={dimensions()}
+        dimensions={analytics.dimensions()}
         view={view()}
         onView={next => setSearch({ view: next === "list" ? "list" : undefined })}
         onToggle={toggleHidden}
       />
       <div class="grid gap-6 lg:grid-cols-2">
-        <CachePanel breakdown={breakdown()} dimension={dimension()} dimensions={dimensions()} />
+        <CachePanel breakdown={breakdown()} dimension={dimension()} dimensions={analytics.dimensions()} />
         <ComparePanel
-          scope={scope()}
-          dimensions={dimensions()}
+          scope={analytics.scope()}
+          dimensions={analytics.dimensions()}
           left={sliceOf(search.left_dim, search.left)}
           right={sliceOf(search.right_dim, search.right)}
           basis={basis()}
@@ -207,7 +153,7 @@ export const AnalyticsUsagePage = () => {
         />
       </div>
       <SessionsPanel
-        scope={scope()}
+        scope={analytics.scope()}
         measure={measure()}
         basis={basis()}
         kinds={kinds()}

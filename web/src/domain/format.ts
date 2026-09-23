@@ -63,3 +63,9 @@ export const formatLatency = (milliseconds: number | undefined): string => {
 
   return `${(milliseconds / 1000).toFixed(1)} s`;
 };
+
+export const formatLatencyTick = (milliseconds: number): string =>
+  (milliseconds < 1000 ? `${Math.round(milliseconds)} ms` : `${COMPACT.format(milliseconds / 1000)} s`);
+
+export const formatSpeed = (tokensPerSecond: number | undefined): string =>
+  (tokensPerSecond === undefined ? "-" : `${COMPACT.format(tokensPerSecond)} tok/s`);

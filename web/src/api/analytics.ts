@@ -11,6 +11,8 @@ export type SeriesBucket = components["schemas"]["SeriesBucket"];
 export type Breakdown = components["schemas"]["Breakdown"];
 export type SessionRow = components["schemas"]["SessionRow"];
 export type Dimensions = components["schemas"]["Dimensions"];
+export type RequestSample = components["schemas"]["RequestSample"];
+export type RequestSamples = components["schemas"]["RequestSamples"];
 
 export type FilterDimension = Exclude<Dimension, "session">;
 
@@ -91,6 +93,14 @@ export const fetchSessions = async (
   if (response.status === 200) return response.data.sessions;
 
   throw new Error(`Sessions request failed with status ${response.status}.`);
+};
+
+export const fetchRequestSamples = async (scope: AnalyticsScope & { limit: number; }): Promise<RequestSamples> => {
+  const response = await api("/analytics/requests", "get", { query: { ...scopeQuery(scope), limit: scope.limit } });
+
+  if (response.status === 200) return response.data;
+
+  throw new Error(`Request samples failed with status ${response.status}.`);
 };
 
 export const fetchDimensions = async (scope: AnalyticsScope): Promise<Dimensions> => {

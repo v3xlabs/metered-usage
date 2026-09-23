@@ -18,9 +18,9 @@ const COST_CARD_LABELS: Record<TokenKind, string> = {
 const formatPercent = (ratio: number | undefined): string =>
   (ratio === undefined ? "-" : `${(ratio * PERCENT).toFixed(1)}%`);
 
-type Card = { label: string; value: string; detail?: string | undefined; link?: { href: string; text: string; } | undefined; };
+export type Card = { label: string; value: string; detail?: string | undefined; link?: { href: string; text: string; } | undefined; };
 
-const CardCell = (properties: { card: Card; }) => (
+export const CardCell = (properties: { card: Card; }) => (
   <div class="min-w-0 rounded-panel bg-surface px-3 py-2.5">
     <dt class="truncate text-xs text-slate-500 dark:text-slate-400">{properties.card.label}</dt>
     <dd class="space-y-0.5">

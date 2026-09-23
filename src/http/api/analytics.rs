@@ -13,6 +13,7 @@ use crate::analytics::dimension::{Dimension, Dimensions, SourceRef};
 use crate::analytics::filter::AnalyticsFilter;
 use crate::analytics::health::{AccountHealth, Health, HealthBucket, HealthWindow};
 use crate::analytics::metrics::{RankBy, UsageMetrics};
+use crate::analytics::sample::{RequestSample, RequestSamples};
 use crate::analytics::series::{SeriesBucket, SeriesQuery};
 use crate::analytics::session::SessionUsage;
 use crate::analytics::summary::{DailyBurn, DistinctCounts, PeakDay, Summary};
@@ -28,6 +29,8 @@ const DEFAULT_BREAKDOWN_LIMIT: usize = 50;
 const MAX_BREAKDOWN_LIMIT: usize = 500;
 const DEFAULT_SESSION_LIMIT: usize = 20;
 const MAX_SESSION_LIMIT: usize = 200;
+const DEFAULT_SAMPLE_LIMIT: i64 = 4000;
+const MAX_SAMPLE_LIMIT: i64 = 20_000;
 const SECONDS_PER_MINUTE: i32 = 60;
 const DEFAULT_HEALTH_WINDOW_MINUTES: u32 = 60;
 const DEFAULT_HEALTH_BUCKET_MINUTES: u32 = 5;
@@ -263,6 +266,61 @@ impl AnalyticsApi {
         }
     }
 
+    /// Single successful requests that recorded a latency, oldest first, for plotting one
+    /// point per request. At most `limit` are returned, shared evenly between the models;
+    /// a model with more than its share keeps every n-th request in time order. `requests`
+    /// counts every such request the filters select.
+    #[oai(
+        path = "/analytics/requests",
+        method = "get",
+        operation_id = "analytics_requests"
+    )]
+    async fn analytics_requests(
+        &self,
+        from: Query<Option<String>>,
+        to: Query<Option<String>>,
+        utc_offset_minutes: Query<Option<i32>>,
+        #[oai(explode = false, default)] source_id: Query<Vec<String>>,
+        #[oai(explode = false, default)] account_id: Query<Vec<String>>,
+        #[oai(explode = false, default)] model: Query<Vec<String>>,
+        #[oai(explode = false, default)] provider: Query<Vec<String>>,
+        #[oai(explode = false, default)] harness: Query<Vec<String>>,
+        limit: Query<Option<i64>>,
+    ) -> RequestSamplesResponse {
+        let filter = match (Scope {
+            from: from.0,
+            to: to.0,
+            utc_offset_minutes: utc_offset_minutes.0,
+            source_id: source_id.0,
+            account_id: account_id.0,
+            model: model.0,
+            provider: provider.0,
+            harness: harness.0,
+        })
+        .try_into()
+        {
+            Ok(filter) => filter,
+            Err(error) => return RequestSamplesResponse::Invalid(Json(error)),
+        };
+
+        match RequestSamples::load(
+            &self.state.database,
+            &filter,
+            limit
+                .0
+                .unwrap_or(DEFAULT_SAMPLE_LIMIT)
+                .clamp(1, MAX_SAMPLE_LIMIT),
+        )
+        .await
+        {
+            Ok(samples) => RequestSamplesResponse::Found(Json(samples.into())),
+            Err(error) => match refusal("analytics_requests", error) {
+                Refusal::Invalid(error) => RequestSamplesResponse::Invalid(Json(error)),
+                Refusal::Failed(error) => RequestSamplesResponse::Failed(Json(error)),
+            },
+        }
+    }
+
     /// The values of each filter that at least one event in the window has.
     #[oai(
         path = "/analytics/dimensions",
@@ -459,7 +517,9 @@ impl From<BucketInput> for Bucket {
 /// parts are the list cost of uncached input, cache reads, cache writes and output (with
 /// its reasoning), each at the event's own price, and add up to `list_cost_usd`. Cache
 /// savings are what cache reads saved against the input rate, less what cache writes cost
-/// above it, at each event's own price; negative when writes outweighed reads.
+/// above it, at each event's own price; negative when writes outweighed reads. Output speed
+/// is the output of successful requests over their time after the first token, or over the
+/// whole request where no first token was recorded.
 #[derive(Debug, Object)]
 #[oai(rename = "UsageMetrics", skip_serializing_if_is_none)]
 struct UsageMetricsOutput {
@@ -484,6 +544,7 @@ struct UsageMetricsOutput {
     unpriced_requests: i64,
     avg_latency_ms: Option<f64>,
     avg_ttft_ms: Option<f64>,
+    output_tokens_per_second: Option<f64>,
 }
 
 impl From<UsageMetrics> for UsageMetricsOutput {
@@ -509,6 +570,7 @@ impl From<UsageMetrics> for UsageMetricsOutput {
             unpriced_requests: metrics.unpriced_requests,
             avg_latency_ms: metrics.avg_latency_ms(),
             avg_ttft_ms: metrics.avg_ttft_ms(),
+            output_tokens_per_second: metrics.output_tokens_per_second(),
         }
     }
 }
@@ -727,6 +789,52 @@ impl From<Dimensions> for DimensionsOutput {
 }
 
 #[derive(Debug, Object)]
+#[oai(rename = "RequestSamples")]
+struct RequestSamplesOutput {
+    /// Every successful request with a latency the filters select, sampled or not.
+    requests: i64,
+    samples: Vec<RequestSampleOutput>,
+}
+
+impl From<RequestSamples> for RequestSamplesOutput {
+    fn from(samples: RequestSamples) -> Self {
+        Self {
+            requests: samples.requests,
+            samples: samples
+                .samples
+                .into_iter()
+                .map(RequestSampleOutput::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "RequestSample", skip_serializing_if_is_none)]
+struct RequestSampleOutput {
+    /// RFC 3339 in UTC.
+    occurred_at: String,
+    model: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    latency_ms: i64,
+    ttft_ms: Option<i64>,
+}
+
+impl From<RequestSample> for RequestSampleOutput {
+    fn from(sample: RequestSample) -> Self {
+        Self {
+            occurred_at: sample.occurred_at.to_string(),
+            model: sample.model,
+            input_tokens: sample.input_tokens,
+            output_tokens: sample.output_tokens,
+            latency_ms: sample.latency_ms,
+            ttft_ms: sample.ttft_ms,
+        }
+    }
+}
+
+#[derive(Debug, Object)]
 #[oai(rename = "SourceRef")]
 struct SourceRefOutput {
     source_id: String,
@@ -860,6 +968,16 @@ enum SessionsResponse {
 enum DimensionsResponse {
     #[oai(status = 200)]
     Found(Json<DimensionsOutput>),
+    #[oai(status = 400)]
+    Invalid(Json<Error>),
+    #[oai(status = 500)]
+    Failed(Json<Error>),
+}
+
+#[derive(ApiResponse)]
+enum RequestSamplesResponse {
+    #[oai(status = 200)]
+    Found(Json<RequestSamplesOutput>),
     #[oai(status = 400)]
     Invalid(Json<Error>),
     #[oai(status = 500)]

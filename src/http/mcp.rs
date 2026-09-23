@@ -102,6 +102,7 @@ struct MetricsOutput {
     unpriced_requests: i64,
     avg_latency_ms: Option<f64>,
     avg_ttft_ms: Option<f64>,
+    output_tokens_per_second: Option<f64>,
 }
 
 impl From<UsageMetrics> for MetricsOutput {
@@ -127,6 +128,7 @@ impl From<UsageMetrics> for MetricsOutput {
             unpriced_requests: metrics.unpriced_requests,
             avg_latency_ms: metrics.avg_latency_ms(),
             avg_ttft_ms: metrics.avg_ttft_ms(),
+            output_tokens_per_second: metrics.output_tokens_per_second(),
         }
     }
 }

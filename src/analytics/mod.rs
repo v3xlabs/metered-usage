@@ -10,6 +10,7 @@ pub mod filter;
 pub mod health;
 pub mod metrics;
 pub mod query;
+pub mod sample;
 pub mod series;
 pub mod session;
 pub mod summary;

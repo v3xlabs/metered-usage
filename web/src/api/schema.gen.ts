@@ -263,6 +263,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/analytics/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Single successful requests that recorded a latency, oldest first, for plotting one
+         *     point per request. At most `limit` are returned, shared evenly between the models;
+         *     a model with more than its share keeps every n-th request in time order. `requests`
+         *     counts every such request the filters select.
+         */
+        get: operations["analytics_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/analytics/dimensions": {
         parameters: {
             query?: never;
@@ -601,7 +623,7 @@ export interface components {
         };
         /**
          * DailyBurn
-         * @description The window's totals divided by `range_days`.
+         * @description The window's totals divided by its local days since the first event ever recorded.
          */
         DailyBurn: {
             /** Format: double */
@@ -915,6 +937,29 @@ export interface components {
             /** Format: int64 */
             repriced: number;
         };
+        /** RequestSample */
+        RequestSample: {
+            /** @description RFC 3339 in UTC. */
+            occurred_at: string;
+            model: string;
+            /** Format: int64 */
+            input_tokens: number;
+            /** Format: int64 */
+            output_tokens: number;
+            /** Format: int64 */
+            latency_ms: number;
+            /** Format: int64 */
+            ttft_ms?: number;
+        };
+        /** RequestSamples */
+        RequestSamples: {
+            /**
+             * Format: int64
+             * @description Every successful request with a latency the filters select, sampled or not.
+             */
+            requests: number;
+            samples: components["schemas"]["RequestSample"][];
+        };
         /** Series */
         Series: {
             buckets: components["schemas"]["SeriesBucket"][];
@@ -1059,7 +1104,9 @@ export interface components {
          *     parts are the list cost of uncached input, cache reads, cache writes and output (with
          *     its reasoning), each at the event's own price, and add up to `list_cost_usd`. Cache
          *     savings are what cache reads saved against the input rate, less what cache writes cost
-         *     above it, at each event's own price; negative when writes outweighed reads.
+         *     above it, at each event's own price; negative when writes outweighed reads. Output speed
+         *     is the output of successful requests over their time after the first token, or over the
+         *     whole request where no first token was recorded.
          */
         UsageMetrics: {
             /** Format: int64 */
@@ -1105,6 +1152,8 @@ export interface components {
             avg_latency_ms?: number;
             /** Format: double */
             avg_ttft_ms?: number;
+            /** Format: double */
+            output_tokens_per_second?: number;
         };
         /** @description One Server-Sent Event of the usage stream; its SSE type says which. */
         UsageStreamMessage: components["schemas"]["UsageEvent"] | components["schemas"]["PricedEvent"];
@@ -1678,6 +1727,51 @@ export interface operations {
                 };
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["SessionList"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    analytics_requests: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                utc_offset_minutes?: number;
+                source_id?: string[];
+                account_id?: string[];
+                model?: string[];
+                provider?: string[];
+                harness?: string[];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["RequestSamples"];
                 };
             };
             400: {
