@@ -17,6 +17,10 @@ const USD_COMPACT = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 const CENT = 0.01;
+const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_DAY = 86_400;
 
 export const formatCompact = (value: number): string => COMPACT.format(value);
 
@@ -30,6 +34,19 @@ export const formatUsdCompact = (value: number): string => USD_COMPACT.format(va
 export const formatCost = (value: number | undefined): string => (value === undefined ? "unpriced" : formatUsd(value));
 
 export const formatMoment = (timestamp: string): string => MOMENT.format(new Date(timestamp));
+
+/** Relative to `nowMs` under a day old, the absolute moment beyond that. */
+export const formatRecentMoment = (timestamp: string, nowMs: number): string => {
+  const seconds = Math.max(0, Math.floor((nowMs - Date.parse(timestamp)) / 1000));
+
+  if (seconds < SECONDS_PER_MINUTE) return RELATIVE.format(-seconds, "second");
+
+  if (seconds < SECONDS_PER_HOUR) return RELATIVE.format(-Math.floor(seconds / SECONDS_PER_MINUTE), "minute");
+
+  if (seconds < SECONDS_PER_DAY) return RELATIVE.format(-Math.floor(seconds / SECONDS_PER_HOUR), "hour");
+
+  return formatMoment(timestamp);
+};
 
 export const formatOptionalMoment = (timestamp: string | undefined, absent: string): string =>
   (timestamp === undefined ? absent : MOMENT.format(new Date(timestamp)));

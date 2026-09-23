@@ -12,11 +12,28 @@ use crate::account::{self, AuthKind, NewAccount};
 use crate::usage::ingest::Incoming;
 use crate::usage::{NewUsageEvent, TokenQuality};
 
+/// Providers whose legacy input holds its cache and whose reasoning is apart from output.
+const SEPARATE_REASONING_MARKERS: [&str; 5] =
+    ["gemini", "aistudio", "antigravity", "vertex", "interaction"];
+/// Providers whose legacy input holds its cache and whose output holds its reasoning.
+const SUBSET_MARKERS: [&str; 8] = [
+    "openai",
+    "codex",
+    "xai",
+    "grok",
+    "kimi",
+    "qwen",
+    "deepseek",
+    "openrouter",
+];
+
 #[derive(Debug, Deserialize)]
 pub struct CliProxyRecord {
     pub timestamp: String,
     pub provider: String,
     pub model: String,
+    #[serde(default)]
+    pub executor_type: Option<String>,
     pub endpoint: String,
     pub tokens: CliProxyTokens,
     pub fail: CliProxyFail,
@@ -54,8 +71,12 @@ pub struct CliProxyRecord {
     pub session_id: Option<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// What the client asked for, such as `auto`.
     #[serde(default)]
     pub service_tier: Option<String>,
+    /// What the upstream says it served, which is the tier it bills.
+    #[serde(default)]
+    pub response_service_tier: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -66,6 +87,8 @@ pub struct CliProxyTokens {
     pub output_tokens: i64,
     #[serde(default)]
     pub reasoning_tokens: i64,
+    #[serde(default)]
+    pub cached_tokens: i64,
     #[serde(default)]
     pub cache_read_tokens: i64,
     #[serde(default)]
@@ -128,8 +151,8 @@ impl TryFrom<CliProxyRecord> for NewUsageEvent {
             .timestamp
             .parse::<Timestamp>()
             .map_err(|_| CliProxyError::Timestamp(record.timestamp.clone()))?;
-        // Version 2 counts cache reads and reasoning separately; the flat block below it
-        // double counts them into the input and output totals.
+        // Version 2 splits every bucket apart the same way for every provider. The flat
+        // block below it is each provider's own count.
         let tokens = if record.accounting_version >= 2 {
             let breakdown = record
                 .token_breakdown
@@ -151,16 +174,13 @@ impl TryFrom<CliProxyRecord> for NewUsageEvent {
                     .and_then(|quality| quality.parse().ok()),
             }
         } else {
-            Tokens {
-                input: record.tokens.input_tokens,
-                output: record.tokens.output_tokens,
-                reasoning: record.tokens.reasoning_tokens,
-                cache_read: record.tokens.cache_read_tokens,
-                cache_write: record.tokens.cache_creation_tokens,
-                unclassified: 0,
-                total: record.tokens.total_tokens,
-                quality: None,
-            }
+            Tokens::flat(
+                &record.tokens,
+                Semantics::of(
+                    &record.provider,
+                    record.executor_type.as_deref().unwrap_or_default(),
+                ),
+            )
         };
         let auth_kind = auth_kind(record.auth_type.as_deref());
         let harness = record
@@ -207,7 +227,8 @@ impl TryFrom<CliProxyRecord> for NewUsageEvent {
                 .failed
                 .then_some(record.fail.body)
                 .filter(|body| !body.is_empty()),
-            service_tier: present(record.service_tier),
+            service_tier: present(record.response_service_tier)
+                .or_else(|| present(record.service_tier)),
             reasoning_effort: present(record.reasoning_effort),
             billed_cost_usd: None,
         })
@@ -224,6 +245,96 @@ struct Tokens {
     unclassified: i64,
     total: i64,
     quality: Option<TokenQuality>,
+}
+
+impl Tokens {
+    /// Reads a record from a gateway older than the breakdown the way the gateway itself
+    /// now reads such a record, `EnsureTokenBreakdownForProvider` in CLIProxyAPI's
+    /// `sdk/cliproxy/usage/accounting.go`. Such a gateway sent Anthropic's input without its
+    /// cache, and the cache reads of Codex and Gemini only as `cached_tokens`.
+    fn flat(tokens: &CliProxyTokens, semantics: Semantics) -> Self {
+        let cache_read = if tokens.cache_read_tokens > 0 {
+            tokens.cache_read_tokens
+        } else {
+            tokens.cached_tokens
+        };
+        let (input, cache_read, output) = match semantics {
+            // Anthropic's output already holds its thinking.
+            Semantics::Independent => (
+                tokens.input_tokens + tokens.cache_read_tokens + tokens.cache_creation_tokens,
+                tokens.cache_read_tokens,
+                tokens.output_tokens,
+            ),
+            Semantics::SeparateReasoning => (
+                tokens.input_tokens,
+                cache_read,
+                tokens.output_tokens + tokens.reasoning_tokens,
+            ),
+            Semantics::Subset => (tokens.input_tokens, cache_read, tokens.output_tokens),
+            Semantics::Unknown => {
+                return Self {
+                    input: 0,
+                    output: 0,
+                    reasoning: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                    unclassified: tokens.total_tokens,
+                    total: tokens.total_tokens,
+                    quality: Some(TokenQuality::Unclassified),
+                };
+            }
+        };
+
+        Self {
+            input,
+            output,
+            reasoning: tokens.reasoning_tokens,
+            cache_read,
+            cache_write: tokens.cache_creation_tokens,
+            unclassified: 0,
+            total: tokens.total_tokens,
+            quality: None,
+        }
+    }
+}
+
+/// How one provider's flat token counts overlap, as `tokenAccountingSemanticsFor` in
+/// CLIProxyAPI's `sdk/cliproxy/usage/accounting.go` names it.
+#[derive(Debug, Clone, Copy)]
+enum Semantics {
+    /// Input holds its cache reads and writes; output holds its reasoning.
+    Subset,
+    /// Input, cache reads and cache writes are apart.
+    Independent,
+    /// Input holds its cache reads; reasoning is apart from output.
+    SeparateReasoning,
+    /// The gateway does not guess, so neither does this service.
+    Unknown,
+}
+
+impl Semantics {
+    fn of(provider: &str, executor: &str) -> Self {
+        let provider = provider.trim().to_lowercase();
+        let executor = executor.trim().to_lowercase();
+        let named = format!("{provider} {executor}");
+        if executor == "openaicompatexecutor"
+            || provider == "openai-compatibility"
+            || provider.starts_with("openai-compatible-")
+        {
+            Self::Subset
+        } else if named.contains("claude") || named.contains("anthropic") {
+            Self::Independent
+        } else if SEPARATE_REASONING_MARKERS
+            .iter()
+            .any(|marker| named.contains(marker))
+        {
+            Self::SeparateReasoning
+        } else if SUBSET_MARKERS.iter().any(|marker| named.contains(marker)) {
+            Self::Subset
+        } else {
+            Self::Unknown
+        }
+    }
 }
 
 /// Reads one record as the gateway sent it. A record that cannot be read is rejected with

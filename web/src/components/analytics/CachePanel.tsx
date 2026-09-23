@@ -2,7 +2,7 @@ import { For, isPending, Show } from "solid-js";
 
 import type { Breakdown, Dimensions, FilterDimension, UsageMetrics } from "../../api/analytics";
 import type { KeyLabel, TokenKind } from "../../domain/analytics";
-import { cacheHitRate, DIMENSION_LABELS, labelKey, TOKEN_KIND_COLORS, TOKEN_KIND_FIELDS, TOKEN_KIND_LABELS } from "../../domain/analytics";
+import { cacheHitRate, COST_KIND_FIELDS, DIMENSION_LABELS, labelKey, TOKEN_KIND_COLORS, TOKEN_KIND_FIELDS, TOKEN_KIND_LABELS } from "../../domain/analytics";
 import { formatCompact, formatUsd } from "../../domain/format";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
@@ -15,26 +15,33 @@ const SEGMENTS: readonly TokenKind[] = ["cache_read", "cache_write", "uncached_i
 const tokenSum = (metrics: UsageMetrics): number =>
   SEGMENTS.reduce((sum, kind) => sum + metrics[TOKEN_KIND_FIELDS[kind]], 0);
 
-const CacheBar = (properties: { metrics: UsageMetrics; }) => (
-  <div
-    role="img"
-    aria-label={SEGMENTS.map(kind => `${TOKEN_KIND_LABELS[kind]} ${formatCompact(properties.metrics[TOKEN_KIND_FIELDS[kind]])}`).join(", ")}
-    class="flex h-2.5 w-full overflow-hidden rounded-full bg-raised"
-  >
-    <For each={SEGMENTS}>
-      {kind => (
-        <span
-          class="h-full"
-          style={{
-            "width": `${tokenSum(properties.metrics) > 0 ? (properties.metrics[TOKEN_KIND_FIELDS[kind]] / tokenSum(properties.metrics)) * PERCENT : 0}%`,
-            "background-color": TOKEN_KIND_COLORS[kind],
-          }}
-          title={`${TOKEN_KIND_LABELS[kind]}: ${formatCompact(properties.metrics[TOKEN_KIND_FIELDS[kind]])}`}
-        />
-      )}
-    </For>
-  </div>
-);
+const KindBar = (properties: { measure: string; valueOf: (kind: TokenKind) => number; format: (value: number) => string; }) => {
+  const total = (): number => SEGMENTS.reduce((sum, kind) => sum + properties.valueOf(kind), 0);
+
+  return (
+    <div class="flex items-center gap-2">
+      <span class="w-10 shrink-0 text-xs text-slate-500 dark:text-slate-400" aria-hidden="true">{properties.measure}</span>
+      <div
+        role="img"
+        aria-label={`${properties.measure}: ${SEGMENTS.map(kind => `${TOKEN_KIND_LABELS[kind]} ${properties.format(properties.valueOf(kind))}`).join(", ")}`}
+        class="flex h-2.5 w-full overflow-hidden rounded-full bg-raised"
+      >
+        <For each={SEGMENTS}>
+          {kind => (
+            <span
+              class="h-full"
+              style={{
+                "width": `${total() > 0 ? (properties.valueOf(kind) / total()) * PERCENT : 0}%`,
+                "background-color": TOKEN_KIND_COLORS[kind],
+              }}
+              title={`${TOKEN_KIND_LABELS[kind]}: ${properties.format(properties.valueOf(kind))}`}
+            />
+          )}
+        </For>
+      </div>
+    </div>
+  );
+};
 
 const formatRate = (metrics: UsageMetrics): string => {
   const rate = cacheHitRate(metrics);
@@ -47,7 +54,8 @@ const CacheRow = (properties: { label: KeyLabel; metrics: UsageMetrics; isTotal?
     <th scope="row" class="max-w-0 py-1.5 pr-3 text-left font-normal text-slate-800 dark:text-slate-200">
       <div class="w-full min-w-0 space-y-1">
         <KeyName label={properties.label} />
-        <CacheBar metrics={properties.metrics} />
+        <KindBar measure="Tokens" valueOf={kind => properties.metrics[TOKEN_KIND_FIELDS[kind]]} format={formatCompact} />
+        <KindBar measure="Cost" valueOf={kind => properties.metrics[COST_KIND_FIELDS[kind]]} format={formatUsd} />
       </div>
     </th>
     <td class="py-1.5 pr-3 text-right text-slate-900 tabular-nums dark:text-slate-100">{formatRate(properties.metrics)}</td>
@@ -85,6 +93,7 @@ export const CachePanel = (properties: {
             {properties.breakdown.total.cache_savings_usd < 0
               ? `Cache writes cost ${formatUsd(-properties.breakdown.total.cache_savings_usd)} more than reads saved versus a no-cache baseline.`
               : `Caching saved ${formatUsd(properties.breakdown.total.cache_savings_usd)} versus a no-cache baseline.`}
+            {` At list price, cache reads cost ${formatUsd(properties.breakdown.total.cache_read_cost_usd)} and cache writes ${formatUsd(properties.breakdown.total.cache_write_cost_usd)}.`}
           </p>
           <table class="w-full text-sm">
             <thead>

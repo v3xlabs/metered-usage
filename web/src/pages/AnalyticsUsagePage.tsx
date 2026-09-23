@@ -79,7 +79,7 @@ export const AnalyticsUsagePage = () => {
     return matched.length === 0 ? TOKEN_KINDS : matched;
   });
   const measure = createMemo((): Measure => (metric() === "cost"
-    ? { metric: "cost", basis: basis() }
+    ? { metric: "cost", basis: basis(), kinds: kinds() }
     : { metric: "tokens", kinds: kinds() }));
   const dimension = createMemo((): FilterDimension => FILTER_DIMENSIONS.find(candidate => candidate === search.dim) ?? "model");
   const mode = createMemo((): StackMode => (search.chart === "area" ? "stacked-area" : "stacked-bar"));
@@ -174,7 +174,12 @@ export const AnalyticsUsagePage = () => {
         onMode={next => setSearch({ chart: next === "stacked-area" ? "area" : undefined })}
         onRestore={key => setSearch({ hide: key === undefined ? undefined : hidden().filter(candidate => candidate !== key) })}
       />
-      <CompositionPanel scope={scope()} bucket={bucket()} mode={mode()} />
+      <CompositionPanel
+        scope={scope()}
+        bucket={bucket()}
+        mode={mode()}
+        metric={metric()}
+      />
       <AttributionPanel
         breakdown={breakdown()}
         measure={measure()}

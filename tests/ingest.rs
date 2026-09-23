@@ -63,12 +63,15 @@ struct UsageEvent {
     user_agent: Option<String>,
     input_tokens: i64,
     output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
     unclassified_tokens: i64,
     total_tokens: i64,
     token_quality: Option<String>,
     status_code: i64,
     failed: bool,
     error_message: Option<String>,
+    service_tier: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +207,21 @@ fn batch() -> Result<Value, serde_json::Error> {
             record(GROK, "xai-1")?,
         ],
     }))
+}
+
+/// A record from a gateway older than the token breakdown, as CLIProxyAPI v7.2.0 sent it:
+/// each provider's own token counts and nothing else.
+fn legacy(provider: &str, executor: &str, tokens: &Value) -> Result<Value, serde_json::Error> {
+    let mut legacy = record(ANTIGRAVITY, &format!("{provider}-1"))?;
+    if let Some(fields) = legacy.as_object_mut() {
+        fields.remove("accounting_version");
+        fields.remove("token_breakdown");
+    }
+    legacy["provider"] = json!(provider);
+    legacy["executor_type"] = json!(executor);
+    legacy["tokens"] = tokens.clone();
+
+    Ok(legacy)
 }
 
 async fn post_batch(
@@ -445,6 +463,109 @@ async fn an_inconsistent_breakdown_is_stored_as_unclassified() {
     assert_eq!(
         summary(&gateway.client).await.metrics.unclassified_tokens,
         12345
+    );
+}
+
+#[tokio::test]
+async fn a_record_without_a_breakdown_is_read_with_its_providers_token_semantics() {
+    let gateway = gateway().await.expect("a gateway");
+    let records = [
+        legacy(
+            "claude",
+            "ClaudeExecutor",
+            &json!({
+                "input_tokens": 8000,
+                "output_tokens": 3000,
+                "cached_tokens": 590_000,
+                "cache_read_tokens": 590_000,
+                "cache_creation_tokens": 2000,
+                "total_tokens": 603_000,
+            }),
+        )
+        .expect("a claude record"),
+        legacy(
+            "codex",
+            "CodexExecutor",
+            &json!({
+                "input_tokens": 120_000,
+                "output_tokens": 5000,
+                "reasoning_tokens": 3000,
+                "cached_tokens": 100_000,
+                "total_tokens": 125_000,
+            }),
+        )
+        .expect("a codex record"),
+        legacy(
+            "gemini",
+            "GeminiExecutor",
+            &json!({
+                "input_tokens": 50_000,
+                "output_tokens": 2000,
+                "reasoning_tokens": 1500,
+                "cached_tokens": 20_000,
+                "total_tokens": 53_500,
+            }),
+        )
+        .expect("a gemini record"),
+    ];
+
+    let ingested = post_batch(
+        &gateway.client,
+        &gateway.source_id,
+        &json!({ "records": records }),
+    )
+    .await;
+    assert_eq!(ingested.accepted, 3);
+
+    let events = events(&gateway.client).await;
+    let tokens = |provider: &str| {
+        let event = events
+            .iter()
+            .find(|event| event.provider == provider)
+            .expect("the provider's event");
+        (
+            event.input_tokens,
+            event.cache_read_tokens,
+            event.cache_write_tokens,
+            event.output_tokens,
+        )
+    };
+    assert_eq!(
+        tokens("claude"),
+        (600_000, 590_000, 2000, 3000),
+        "Anthropic's input leaves its cache out"
+    );
+    assert_eq!(
+        tokens("codex"),
+        (120_000, 100_000, 0, 5000),
+        "OpenAI's cache reads arrive only as cached tokens"
+    );
+    assert_eq!(
+        tokens("gemini"),
+        (50_000, 20_000, 0, 3500),
+        "Gemini's reasoning is apart from its output"
+    );
+}
+
+#[tokio::test]
+async fn the_tier_the_upstream_served_is_the_tier_stored() {
+    let gateway = gateway().await.expect("a gateway");
+    let mut served = record(GROK, "xai-1").expect("a reference record");
+    served["response_service_tier"] = json!("priority");
+
+    post_batch(
+        &gateway.client,
+        &gateway.source_id,
+        &json!({ "records": [served] }),
+    )
+    .await;
+
+    let events = events(&gateway.client).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].service_tier.as_deref(),
+        Some("priority"),
+        "the client asked for auto; the upstream bills what it served"
     );
 }
 

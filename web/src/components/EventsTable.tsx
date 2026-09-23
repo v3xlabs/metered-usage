@@ -2,7 +2,7 @@ import { createMemo, For, Show } from "solid-js";
 
 import type { UsageEvent } from "../api/usage";
 import { accountsNeedingSource } from "../domain/account";
-import { formatCost, formatExact, formatLatency, formatMoment } from "../domain/format";
+import { formatCost, formatExact, formatLatency, formatMoment, formatRecentMoment } from "../domain/format";
 import { AccountName } from "./AccountName";
 
 const HEADER_CELL = "px-3 py-2 font-medium";
@@ -57,12 +57,18 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
               {record => (
                 <tr class="hover:bg-raised">
                   <td class={[CELL, "whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400"]}>
-                    {formatMoment(record.occurred_at)}
+                    <time datetime={record.occurred_at} title={formatMoment(record.occurred_at)}>
+                      {formatRecentMoment(record.occurred_at, properties.nowMs)}
+                    </time>
                   </td>
                   <td class={CELL}>
                     <span class="font-medium text-slate-900 dark:text-slate-100">{record.model}</span>
-                    <Show when={record.model_alias}>
-                      {alias => <span class="ml-1.5 text-slate-500 dark:text-slate-500">{alias()}</span>}
+                    <Show when={record.model_alias !== record.model && record.model_alias}>
+                      {alias => (
+                        <span class="ml-1.5 text-slate-500 dark:text-slate-500" title="Alias the client requested">
+                          {alias()}
+                        </span>
+                      )}
                     </Show>
                   </td>
                   <td class={[CELL, "max-w-72"]}>

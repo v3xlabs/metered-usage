@@ -14,7 +14,7 @@ import { RANGES, rangeStart } from "../domain/range";
 
 const PAGE_SIZE = 50;
 const MAX_LIVE_ROWS = 500;
-const CLOCK_INTERVAL_MS = 5000;
+const CLOCK_INTERVAL_MS = 1000;
 
 const RANGE_OPTIONS = RANGES.map(range => ({ value: range.rangeId, label: range.label }));
 

@@ -67,18 +67,28 @@ export const TOKEN_KIND_FIELDS: Record<TokenKind, "uncached_input_tokens" | "cac
   output: "output_tokens",
 };
 
+export const COST_KIND_FIELDS: Record<TokenKind, "uncached_input_cost_usd" | "cache_read_cost_usd" | "cache_write_cost_usd" | "output_cost_usd"> = {
+  uncached_input: "uncached_input_cost_usd",
+  cache_read: "cache_read_cost_usd",
+  cache_write: "cache_write_cost_usd",
+  output: "output_cost_usd",
+};
+
 export type Measure
-  = | { metric: "cost"; basis: CostBasis; }
+  = | { metric: "cost"; basis: CostBasis; kinds: readonly TokenKind[]; }
     | { metric: "tokens"; kinds: readonly TokenKind[]; };
 
-export const costOf = (metrics: UsageMetrics, basis: CostBasis): number =>
-  (basis === "list" ? metrics.list_cost_usd : metrics.billed_cost_usd);
+// Only the list cost splits by kind; a billed cost is what the upstream charged as a whole.
+export const costOf = (metrics: UsageMetrics, basis: CostBasis, kinds: readonly TokenKind[]): number =>
+  (basis === "list"
+    ? kinds.reduce((sum, kind) => sum + metrics[COST_KIND_FIELDS[kind]], 0)
+    : metrics.billed_cost_usd);
 
 export const tokensOf = (metrics: UsageMetrics, kinds: readonly TokenKind[]): number =>
   kinds.reduce((sum, kind) => sum + metrics[TOKEN_KIND_FIELDS[kind]], 0);
 
 export const measureOf = (metrics: UsageMetrics, measure: Measure): number =>
-  (measure.metric === "cost" ? costOf(metrics, measure.basis) : tokensOf(metrics, measure.kinds));
+  (measure.metric === "cost" ? costOf(metrics, measure.basis, measure.kinds) : tokensOf(metrics, measure.kinds));
 
 export const rankByOf = (measure: Measure): RankBy => {
   if (measure.metric === "tokens") return "total_tokens";

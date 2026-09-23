@@ -455,9 +455,11 @@ impl From<BucketInput> for Bucket {
     }
 }
 
-/// Uncached input is input less cache reads and writes, never below zero. Cache savings
-/// are what cache reads saved against the input rate, less what cache writes cost above
-/// it, at each event's own price; negative when writes outweighed reads.
+/// Uncached input is input less cache reads and writes, never below zero. The four cost
+/// parts are the list cost of uncached input, cache reads, cache writes and output (with
+/// its reasoning), each at the event's own price, and add up to `list_cost_usd`. Cache
+/// savings are what cache reads saved against the input rate, less what cache writes cost
+/// above it, at each event's own price; negative when writes outweighed reads.
 #[derive(Debug, Object)]
 #[oai(rename = "UsageMetrics", skip_serializing_if_is_none)]
 struct UsageMetricsOutput {
@@ -473,6 +475,10 @@ struct UsageMetricsOutput {
     total_tokens: i64,
     list_cost_usd: f64,
     billed_cost_usd: f64,
+    uncached_input_cost_usd: f64,
+    cache_read_cost_usd: f64,
+    cache_write_cost_usd: f64,
+    output_cost_usd: f64,
     cache_savings_usd: f64,
     /// Events no price has been found for yet, left out of every cost.
     unpriced_requests: i64,
@@ -495,6 +501,10 @@ impl From<UsageMetrics> for UsageMetricsOutput {
             total_tokens: metrics.total_tokens,
             list_cost_usd: metrics.list_cost_usd,
             billed_cost_usd: metrics.billed_cost_usd,
+            uncached_input_cost_usd: metrics.uncached_input_cost_usd,
+            cache_read_cost_usd: metrics.cache_read_cost_usd,
+            cache_write_cost_usd: metrics.cache_write_cost_usd,
+            output_cost_usd: metrics.output_cost_usd,
             cache_savings_usd: metrics.cache_savings_usd,
             unpriced_requests: metrics.unpriced_requests,
             avg_latency_ms: metrics.avg_latency_ms(),

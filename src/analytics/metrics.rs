@@ -7,8 +7,9 @@ use sqlx::FromRow;
 
 /// Every column of [`UsageMetrics`], over `usage_event` left joined to the `model_price`
 /// row that priced it. Averages are kept as a total and a sample count so that two groups
-/// merge exactly. Cache savings read the event's own price row, so an unpriced event adds
-/// nothing, and a cache write can make them negative.
+/// merge exactly. The four list cost parts and cache savings read the event's own price
+/// row, so an unpriced event adds nothing to them, the parts add up to the list cost, and a
+/// cache write can make the savings negative.
 pub const METRICS: &str = "COUNT(*) AS requests, \
      SUM(usage_event.failed) AS failures, \
      SUM(usage_event.input_tokens) AS input_tokens, \
@@ -22,6 +23,15 @@ pub const METRICS: &str = "COUNT(*) AS requests, \
      SUM(usage_event.total_tokens) AS total_tokens, \
      TOTAL(usage_event.list_cost_usd) AS list_cost_usd, \
      TOTAL(usage_event.billed_cost_usd) AS billed_cost_usd, \
+     TOTAL(MAX(usage_event.input_tokens - usage_event.cache_read_tokens \
+         - usage_event.cache_write_tokens, 0) * model_price.input_usd_per_mtok / 1e6) \
+         AS uncached_input_cost_usd, \
+     TOTAL(usage_event.cache_read_tokens * model_price.cached_input_usd_per_mtok / 1e6) \
+         AS cache_read_cost_usd, \
+     TOTAL(usage_event.cache_write_tokens * model_price.cache_write_usd_per_mtok / 1e6) \
+         AS cache_write_cost_usd, \
+     TOTAL(usage_event.output_tokens * model_price.output_usd_per_mtok / 1e6) \
+         AS output_cost_usd, \
      TOTAL((usage_event.cache_read_tokens \
              * (model_price.input_usd_per_mtok - model_price.cached_input_usd_per_mtok) \
          - usage_event.cache_write_tokens \
@@ -50,6 +60,10 @@ pub struct UsageMetrics {
     pub total_tokens: i64,
     pub list_cost_usd: f64,
     pub billed_cost_usd: f64,
+    pub uncached_input_cost_usd: f64,
+    pub cache_read_cost_usd: f64,
+    pub cache_write_cost_usd: f64,
+    pub output_cost_usd: f64,
     pub cache_savings_usd: f64,
     pub unpriced_requests: i64,
     latency_ms_total: f64,
@@ -84,6 +98,10 @@ impl AddAssign<&Self> for UsageMetrics {
         self.total_tokens += other.total_tokens;
         self.list_cost_usd += other.list_cost_usd;
         self.billed_cost_usd += other.billed_cost_usd;
+        self.uncached_input_cost_usd += other.uncached_input_cost_usd;
+        self.cache_read_cost_usd += other.cache_read_cost_usd;
+        self.cache_write_cost_usd += other.cache_write_cost_usd;
+        self.output_cost_usd += other.output_cost_usd;
         self.cache_savings_usd += other.cache_savings_usd;
         self.unpriced_requests += other.unpriced_requests;
         self.latency_ms_total += other.latency_ms_total;

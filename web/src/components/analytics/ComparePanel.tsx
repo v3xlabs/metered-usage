@@ -87,7 +87,7 @@ const Comparison = (properties: {
   kinds: readonly TokenKind[];
 }) => {
   const rows = createMemo((): readonly Row[] => [
-    { label: "Cost", value: metrics => costOf(metrics, properties.basis), format: formatUsd },
+    { label: "Cost", value: metrics => costOf(metrics, properties.basis, properties.kinds), format: formatUsd },
     { label: "Tokens", value: metrics => tokensOf(metrics, properties.kinds), format: formatCompact },
     { label: "Input tokens", value: metrics => metrics.input_tokens, format: formatCompact },
     { label: "Output tokens", value: metrics => metrics.output_tokens, format: formatCompact },
@@ -98,7 +98,7 @@ const Comparison = (properties: {
       formatDelta: value => `${(value * PERCENT).toFixed(1)} pts`,
     },
     { label: "Requests", value: metrics => metrics.requests, format: formatExact },
-    { label: "Cost per request", value: metrics => perRequest(metrics, costOf(metrics, properties.basis)), format: formatUsd },
+    { label: "Cost per request", value: metrics => perRequest(metrics, costOf(metrics, properties.basis, properties.kinds)), format: formatUsd },
     { label: "Tokens per request", value: metrics => perRequest(metrics, tokensOf(metrics, properties.kinds)), format: formatCompact },
     { label: "Average latency", value: metrics => metrics.avg_latency_ms, format: formatLatency },
     { label: "Average time to first token", value: metrics => metrics.avg_ttft_ms, format: formatLatency },

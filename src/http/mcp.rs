@@ -39,8 +39,9 @@ struct SourceOutput {
     event_count: i64,
 }
 
-/// Totals of a window and its rate per local day. `cache_savings_usd` is what cache reads
-/// saved against the input rate, less what cache writes cost above it; it can be negative.
+/// Totals of a window and its rate per local day. The four `*_cost_usd` parts of the list
+/// cost add up to `list_cost_usd`. `cache_savings_usd` is what cache reads saved against
+/// the input rate, less what cache writes cost above it; it can be negative.
 #[derive(Debug, Serialize, JsonSchema)]
 struct SummaryOutput {
     metrics: MetricsOutput,
@@ -93,6 +94,10 @@ struct MetricsOutput {
     total_tokens: i64,
     list_cost_usd: f64,
     billed_cost_usd: f64,
+    uncached_input_cost_usd: f64,
+    cache_read_cost_usd: f64,
+    cache_write_cost_usd: f64,
+    output_cost_usd: f64,
     cache_savings_usd: f64,
     unpriced_requests: i64,
     avg_latency_ms: Option<f64>,
@@ -114,6 +119,10 @@ impl From<UsageMetrics> for MetricsOutput {
             total_tokens: metrics.total_tokens,
             list_cost_usd: metrics.list_cost_usd,
             billed_cost_usd: metrics.billed_cost_usd,
+            uncached_input_cost_usd: metrics.uncached_input_cost_usd,
+            cache_read_cost_usd: metrics.cache_read_cost_usd,
+            cache_write_cost_usd: metrics.cache_write_cost_usd,
+            output_cost_usd: metrics.output_cost_usd,
             cache_savings_usd: metrics.cache_savings_usd,
             unpriced_requests: metrics.unpriced_requests,
             avg_latency_ms: metrics.avg_latency_ms(),

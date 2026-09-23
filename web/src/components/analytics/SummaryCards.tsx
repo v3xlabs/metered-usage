@@ -3,11 +3,17 @@ import { createMemo, For, Show } from "solid-js";
 
 import type { PeakDay, Summary } from "../../api/analytics";
 import type { CostBasis, Metric, TokenKind } from "../../domain/analytics";
-import { costOf, TOKEN_KINDS, tokensOf } from "../../domain/analytics";
+import { COST_KIND_FIELDS, costOf, TOKEN_KINDS, tokensOf } from "../../domain/analytics";
 import { formatCompact, formatExact, formatUsd } from "../../domain/format";
 
 const PERCENT = 100;
 const DAY_LABEL = new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" });
+const COST_CARD_LABELS: Record<TokenKind, string> = {
+  uncached_input: "Input cost",
+  cache_read: "Cache read cost",
+  cache_write: "Cache write cost",
+  output: "Output cost",
+};
 
 const formatPercent = (ratio: number | undefined): string =>
   (ratio === undefined ? "-" : `${(ratio * PERCENT).toFixed(1)}%`);
@@ -48,8 +54,19 @@ export const SummaryCards = (properties: {
     const current = metrics();
     const burn = properties.summary.daily_burn;
     const peakDay = peak();
+    const costParts = TOKEN_KINDS.map((kind): Card => {
+      const cost = current[COST_KIND_FIELDS[kind]];
+      const share = formatPercent(current.list_cost_usd > 0 ? cost / current.list_cost_usd : undefined);
+
+      return {
+        label: COST_CARD_LABELS[kind],
+        value: formatUsd(cost),
+        detail: kind === "uncached_input" ? `uncached, ${share} of list` : `${share} of list`,
+      };
+    });
 
     return [
+      ...costParts,
       {
         label: isAllKinds() ? "Total tokens" : "Tokens (selected kinds)",
         value: formatCompact(isAllKinds() ? current.total_tokens : tokensOf(current, properties.kinds)),
@@ -95,11 +112,13 @@ export const SummaryCards = (properties: {
   const featured = (): JSX.Element => (
     <div class="flex min-w-0 flex-col justify-between gap-2 rounded-panel bg-surface px-4 py-3 sm:col-span-2 sm:row-span-2">
       <dt class="text-xs text-slate-500 dark:text-slate-400">
-        {properties.basis === "list" ? "Total cost at list price" : "Total billed cost"}
+        {properties.basis === "list"
+          ? `${isAllKinds() ? "Total cost" : "Cost of selected kinds"} at list price`
+          : "Total billed cost"}
       </dt>
       <dd class="space-y-1">
         <p class="text-3xl font-semibold tracking-tight text-slate-900 tabular-nums dark:text-slate-100">
-          {formatUsd(costOf(metrics(), properties.basis))}
+          {formatUsd(costOf(metrics(), properties.basis, properties.kinds))}
         </p>
         <p class="text-xs text-slate-500 tabular-nums dark:text-slate-400">
           {properties.basis === "list"

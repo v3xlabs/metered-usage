@@ -59,7 +59,7 @@ export const SessionsPanel = (properties: {
                       </td>
                       <td class={[CELL, "max-w-56 truncate"]} title={session.models.join(", ")}>{session.models.join(", ")}</td>
                       <td class={[CELL, "text-right tabular-nums"]}>{formatCompact(tokensOf(session.metrics, properties.kinds))}</td>
-                      <td class={[CELL, "text-right tabular-nums"]}>{formatUsd(costOf(session.metrics, properties.basis))}</td>
+                      <td class={[CELL, "text-right tabular-nums"]}>{formatUsd(costOf(session.metrics, properties.basis, properties.kinds))}</td>
                       <td class={[CELL, "text-xs whitespace-nowrap text-slate-500 dark:text-slate-400"]}>{formatMoment(session.first_at)}</td>
                       <td class={[CELL, "text-xs whitespace-nowrap text-slate-500 dark:text-slate-400"]}>{formatMoment(session.last_at)}</td>
                     </tr>

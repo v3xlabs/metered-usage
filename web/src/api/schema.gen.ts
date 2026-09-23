@@ -1048,9 +1048,11 @@ export interface components {
         };
         /**
          * UsageMetrics
-         * @description Uncached input is input less cache reads and writes, never below zero. Cache savings
-         *     are what cache reads saved against the input rate, less what cache writes cost above
-         *     it, at each event's own price; negative when writes outweighed reads.
+         * @description Uncached input is input less cache reads and writes, never below zero. The four cost
+         *     parts are the list cost of uncached input, cache reads, cache writes and output (with
+         *     its reasoning), each at the event's own price, and add up to `list_cost_usd`. Cache
+         *     savings are what cache reads saved against the input rate, less what cache writes cost
+         *     above it, at each event's own price; negative when writes outweighed reads.
          */
         UsageMetrics: {
             /** Format: int64 */
@@ -1077,6 +1079,14 @@ export interface components {
             list_cost_usd: number;
             /** Format: double */
             billed_cost_usd: number;
+            /** Format: double */
+            uncached_input_cost_usd: number;
+            /** Format: double */
+            cache_read_cost_usd: number;
+            /** Format: double */
+            cache_write_cost_usd: number;
+            /** Format: double */
+            output_cost_usd: number;
             /** Format: double */
             cache_savings_usd: number;
             /**

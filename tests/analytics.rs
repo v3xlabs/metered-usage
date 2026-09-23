@@ -65,6 +65,10 @@ struct Metrics {
     total_tokens: i64,
     list_cost_usd: f64,
     billed_cost_usd: f64,
+    uncached_input_cost_usd: f64,
+    cache_read_cost_usd: f64,
+    cache_write_cost_usd: f64,
+    output_cost_usd: f64,
     cache_savings_usd: f64,
     unpriced_requests: i64,
     avg_latency_ms: Option<f64>,
@@ -445,6 +449,18 @@ async fn a_summary_reports_every_measure_of_the_window() -> Result<(), Failure> 
     assert_eq!(metrics.total_tokens, 3_416_000);
     close(metrics.list_cost_usd, 4.158);
     close(metrics.billed_cost_usd, 1.203);
+    // Only priced events count: d's 2 000 000 uncached and 5000 out have no price.
+    close(metrics.uncached_input_cost_usd, 1.203);
+    close(metrics.cache_read_cost_usd, 0.18);
+    close(metrics.cache_write_cost_usd, 1.125);
+    close(metrics.output_cost_usd, 1.65);
+    close(
+        metrics.uncached_input_cost_usd
+            + metrics.cache_read_cost_usd
+            + metrics.cache_write_cost_usd
+            + metrics.output_cost_usd,
+        metrics.list_cost_usd,
+    );
     close(metrics.cache_savings_usd, 1.395);
     assert_eq!(metrics.unpriced_requests, 1);
     close(metrics.avg_latency_ms.ok_or("a latency")?, 2000.0);

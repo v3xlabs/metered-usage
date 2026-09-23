@@ -504,6 +504,49 @@ async fn the_long_context_price_starts_above_its_threshold() -> Result<(), Failu
 }
 
 #[tokio::test]
+async fn a_rate_a_tier_or_threshold_leaves_out_falls_back_as_litellm_does() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.maps.public.lock().await["gpt-5.4"] = json!({
+        "litellm_provider": "openai",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1.5e-05,
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token_flex": 1.25e-06,
+        "output_cost_per_token_flex": 7.5e-06,
+        "input_cost_per_token_above_272k_tokens": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 2.25e-05,
+    });
+    harness.sync().await?;
+    let cached = |upstream_id: &str, input: i64, cache_read: i64, tier: Option<&str>| {
+        let mut event = request(upstream_id, at("2025-06-01T00:00:00Z")?, input, 1000);
+        event.model = "gpt-5.4".to_owned();
+        event.cache_read_tokens = cache_read;
+        event.service_tier = tier.map(str::to_owned);
+        Ok::<_, Failure>(event)
+    };
+    harness
+        .store(
+            "proxy",
+            vec![
+                cached("flex", 10_000, 8000, Some("flex"))?,
+                cached("long", 300_000, 290_000, None)?,
+                cached("flex-long", 300_000, 290_000, Some("flex"))?,
+            ],
+        )
+        .await?;
+    harness.fill().await?;
+
+    // 2000 uncached at the flex 1.25, 8000 read at the base 0.25, 1000 out at the flex 7.5.
+    close(harness.cost("flex").await?.list_cost_usd, 0.012);
+    // 10 000 uncached at 5, 290 000 read at the base 0.25, 1000 out at 22.5.
+    close(harness.cost("long").await?.list_cost_usd, 0.145);
+    // Flex names no long-context rate, so the long-context rates apply.
+    close(harness.cost("flex-long").await?.list_cost_usd, 0.145);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn cache_tokens_are_priced_apart_from_the_input_they_are_part_of() -> Result<(), Failure> {
     let harness = harness().await?;
     harness.sync().await?;

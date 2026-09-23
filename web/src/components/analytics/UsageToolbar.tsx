@@ -84,27 +84,25 @@ export const UsageToolbar = (properties: {
           options={METRIC_OPTIONS}
           onChoose={properties.onMetric}
         />
-        <Show when={properties.metric === "tokens"}>
-          <fieldset class="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <legend class="sr-only">Token kinds</legend>
-            <For each={TOKEN_KINDS}>
-              {kind => (
-                <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={properties.kinds.includes(kind)}
-                    disabled={properties.kinds.length === 1 && properties.kinds.includes(kind)}
-                    onChange={event => properties.onKinds(event.currentTarget.checked
-                      ? TOKEN_KINDS.filter(candidate => candidate === kind || properties.kinds.includes(candidate))
-                      : properties.kinds.filter(candidate => candidate !== kind))}
-                    class="accent-blue-600"
-                  />
-                  {TOKEN_KIND_LABELS[kind]}
-                </label>
-              )}
-            </For>
-          </fieldset>
-        </Show>
+        <fieldset class="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <legend class="sr-only">Token kinds</legend>
+          <For each={TOKEN_KINDS}>
+            {kind => (
+              <label class="flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={properties.kinds.includes(kind)}
+                  disabled={properties.kinds.length === 1 && properties.kinds.includes(kind)}
+                  onChange={event => properties.onKinds(event.currentTarget.checked
+                    ? TOKEN_KINDS.filter(candidate => candidate === kind || properties.kinds.includes(candidate))
+                    : properties.kinds.filter(candidate => candidate !== kind))}
+                  class="accent-blue-600"
+                />
+                {TOKEN_KIND_LABELS[kind]}
+              </label>
+            )}
+          </For>
+        </fieldset>
         <Segmented
           label="Cost basis"
           value={properties.basis}

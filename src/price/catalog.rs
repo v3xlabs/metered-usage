@@ -19,6 +19,9 @@ const FETCH_TIMEOUT: Duration = Duration::from_mins(1);
 const SAMPLE_ENTRY: &str = "sample_spec";
 const LONG_CONTEXT_PREFIX: &str = "input_cost_per_token_above_";
 const LONG_CONTEXT_SUFFIX: &str = "k_tokens";
+/// The provider LiteLLM bills the long-context rate from the threshold itself, not the token
+/// after it (`_INCLUSIVE_THRESHOLD_PROVIDERS` in `litellm_core_utils/llm_cost_calc/utils.py`).
+const INCLUSIVE_THRESHOLD_PROVIDER: &str = "xai";
 /// The key suffix a price for a service tier carries, and the tier a request names.
 const SERVICE_TIERS: [(&str, Option<&str>); 4] = [
     ("", None),
@@ -89,8 +92,7 @@ impl From<Map<String, Value>> for Catalog {
             let first = prices.len();
             for (threshold, min_input_tokens) in thresholds(&entry) {
                 for (suffix, service_tier) in SERVICE_TIERS {
-                    let tail = format!("{threshold}{suffix}");
-                    if let Some(rates) = rates(&entry, &tail) {
+                    if let Some(rates) = rates(&entry, &threshold, suffix) {
                         prices.push(CatalogPrice {
                             provider: provider.clone(),
                             model: model.clone(),
@@ -119,7 +121,7 @@ impl From<Map<String, Value>> for Catalog {
                 let known = prices[first..].iter().any(|price| {
                     price.service_tier.is_none() && price.min_input_tokens == min_input_tokens
                 });
-                if let Some(rates) = rates(tier, "").filter(|_| !known) {
+                if let Some(rates) = rates(tier, "", "").filter(|_| !known) {
                     prices.push(CatalogPrice {
                         provider: provider.clone(),
                         model: model.clone(),
@@ -253,8 +255,12 @@ async fn record(
 }
 
 /// The key tail and first token count of the base price and of every long-context price
-/// the entry names. LiteLLM charges `_above_200k_tokens` from 200 001 input tokens on.
+/// the entry names. LiteLLM charges `_above_200k_tokens` from 200 001 input tokens on, and
+/// from 200 000 for xAI.
 fn thresholds(entry: &Map<String, Value>) -> Vec<(String, i64)> {
+    let past_threshold = i64::from(
+        entry.get("litellm_provider").and_then(Value::as_str) != Some(INCLUSIVE_THRESHOLD_PROVIDER),
+    );
     let mut thresholds = vec![(String::new(), 0)];
     for key in entry.keys() {
         let Some(thousands) = key
@@ -266,19 +272,37 @@ fn thresholds(entry: &Map<String, Value>) -> Vec<(String, i64)> {
         };
         thresholds.push((
             format!("_above_{thousands}{LONG_CONTEXT_SUFFIX}"),
-            thousands * 1000 + 1,
+            thousands * 1000 + past_threshold,
         ));
     }
     thresholds
 }
 
-fn rates(entry: &Map<String, Value>, tail: &str) -> Option<Rates> {
-    let price = |name: &str| {
+/// The rates of one threshold and tier, where the entry names an input price for that
+/// tier. A rate the entry leaves out falls back as LiteLLM's `_get_token_base_cost` does
+/// (`litellm/litellm_core_utils/llm_cost_calc/utils.py`): to the same rate without the
+/// tier, then to the tier's rate below the threshold, then to the base rate, and a cache
+/// rate named nowhere is the input rate.
+fn rates(entry: &Map<String, Value>, threshold: &str, tier: &str) -> Option<Rates> {
+    let tails = [
+        format!("{threshold}{tier}"),
+        threshold.to_owned(),
+        tier.to_owned(),
+        String::new(),
+    ];
+    let named = |name: &str, tail: &str| {
         entry
             .get(&format!("{name}{tail}"))
             .and_then(Value::as_f64)
             .map(per_million)
     };
+    let price = |name: &str| tails.iter().find_map(|tail| named(name, tail));
+    if !tier.is_empty()
+        && named("input_cost_per_token", &tails[0]).is_none()
+        && named("input_cost_per_token", tier).is_none()
+    {
+        return None;
+    }
     let input = price("input_cost_per_token")?;
     let output = price("output_cost_per_token")?;
 
