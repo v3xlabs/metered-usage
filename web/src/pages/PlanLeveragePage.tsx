@@ -3,6 +3,7 @@ import { createMemo, createSignal, Errored, For, Loading, refresh, Show } from "
 import { listAccounts } from "../api/accounts";
 import { fetchLeverage } from "../api/leverage";
 import { listPlans } from "../api/plans";
+import { fetchQuota } from "../api/quota";
 import { AccountLeverageCard } from "../components/leverage/AccountLeverageCard";
 import { LeverageHistory } from "../components/leverage/LeverageHistory";
 import { RegionFailure, RegionPending } from "../components/Region";
@@ -23,6 +24,14 @@ export const PlanLeveragePage = () => {
   const accounts = createMemo(() => listAccounts());
   const plans = createMemo(() => listPlans());
   const leverage = createMemo(() => fetchLeverage());
+  // Read apart from the plans, so the page still shows when the quota cannot be read.
+  const windowsByAccount = createMemo(async () => {
+    const result = await fetchQuota();
+
+    if (!result.ok) throw new Error(result.message);
+
+    return new Map(result.value.map(entry => [entry.account.account_id, entry.windows]));
+  });
   const nowMs = Date.now();
   const [selectedAccountId, setSelectedAccountId] = createSignal<string | undefined>();
 
@@ -80,6 +89,7 @@ export const PlanLeveragePage = () => {
                       isSourceShown={needingSource().has(entry.account.account_id)}
                       isSelected={selected()?.account.account_id === entry.account.account_id}
                       nowMs={nowMs}
+                      windows={windowsByAccount().get(entry.account.account_id)}
                       onSelect={() => setSelectedAccountId(entry.account.account_id)}
                       onChanged={reload}
                     />

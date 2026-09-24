@@ -7,7 +7,7 @@ use crate::quota::management::{ApiCall, Management};
 use crate::quota::provider::{
     Observation, RefreshError, answer, instant, number, text, truthy, used_from_percent,
 };
-use crate::quota::window::NewWindow;
+use crate::quota::window::{NewWindow, Scope};
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
@@ -83,6 +83,8 @@ fn windows(usage: &Value) -> Vec<NewWindow> {
                     WEEK
                 }),
                 resets_at: window.get("resets_at").and_then(instant),
+                scope: scope(key),
+                starts_on_use: payload_key == "five_hour",
                 ..NewWindow::default()
             })
         })
@@ -94,6 +96,7 @@ fn windows(usage: &Value) -> Vec<NewWindow> {
             used_fraction: limit.get("percent").and_then(number).map(used_from_percent),
             window_seconds: Some(WEEK),
             resets_at: limit.get("resets_at").and_then(instant),
+            scope: scope("seven-day-fable"),
             ..NewWindow::default()
         });
     }
@@ -151,6 +154,18 @@ fn fable_limit(usage: &Value) -> Option<&Value> {
         .find(|limit| limit.get("is_active").and_then(Value::as_bool) == Some(true))
         .or_else(|| candidates.first())
         .copied()
+}
+
+/// The model limits count only their own model. Cowork counts work Claude runs itself,
+/// which never passes a gateway.
+fn scope(key: &str) -> Scope {
+    match key {
+        "seven-day-opus" => Scope::Model("opus".to_owned()),
+        "seven-day-sonnet" => Scope::Model("sonnet".to_owned()),
+        "seven-day-fable" => Scope::Model("fable".to_owned()),
+        "seven-day-cowork" => Scope::Unmetered,
+        _ => Scope::Account,
+    }
 }
 
 fn plan(profile: &Value) -> Option<String> {

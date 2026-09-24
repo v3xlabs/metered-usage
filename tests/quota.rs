@@ -446,8 +446,115 @@ async fn a_second_refresh_replaces_every_window() {
     assert_eq!(keys, ["five-hour", "seven-day"]);
 }
 
+fn minutes_from(now: Timestamp, minutes: i64) -> String {
+    StoredTimestamp::from(now + SignedDuration::from_mins(minutes)).to_string()
+}
+
+/// Every window lasts five hours. Minutes are relative to `now`.
+async fn insert_windows(pool: &sqlx::SqlitePool, now: Timestamp) -> Result<(), sqlx::Error> {
+    for (upstream_key, key, used_fraction, scope, starts_on_use, observed, resets) in [
+        ("a1", "opus", 0.2, "model:opus", false, -60, 60),
+        ("a1", "sonnet", 0.5, "model:sonnet", false, -100, -30),
+        ("a1", "untouched", 0.0, "account", false, -60, 60),
+        ("a1", "cowork", 0.3, "unmetered", false, -60, 60),
+        ("a2", "five-hour", 0.9, "account", true, -400, -120),
+        ("a2", "idle", 0.9, "account", true, -400, -5),
+        ("a4", "limit-0", 0.1, "account", false, -60, 60),
+    ] {
+        sqlx::query(
+            "INSERT INTO quota_window (account_id, window_key, label, used_fraction, \
+             window_seconds, resets_at, observed_at, scope, starts_on_use) \
+             SELECT account_id, ?, ?, ?, 18000, ?, ?, ?, ? FROM account WHERE upstream_key = ?",
+        )
+        .bind(key)
+        .bind(key)
+        .bind(used_fraction)
+        .bind(minutes_from(now, resets))
+        .bind(minutes_from(now, observed))
+        .bind(scope)
+        .bind(starts_on_use)
+        .bind(upstream_key)
+        .execute(pool)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE quota_window SET used_value = 10, limit_value = 100, unit = 'requests' \
+         WHERE window_key = 'limit-0'",
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Opus learns 0.2 per dollar twice, and 0.01 once from a window reset early.
+async fn insert_samples(pool: &sqlx::SqlitePool, now: Timestamp) -> Result<(), sqlx::Error> {
+    for (upstream_key, key, started, observed, used_fraction) in [
+        ("a1", "opus", -240, -60, 0.2),
+        ("a1", "opus", -2000, -1800, 0.4),
+        ("a1", "opus", -3000, -2800, 0.05),
+        ("a1", "sonnet", -330, -100, 0.5),
+        ("a2", "five-hour", -420, -400, 0.1),
+    ] {
+        sqlx::query(
+            "INSERT INTO quota_sample (account_id, window_key, started_at, observed_at, \
+             used_fraction) SELECT account_id, ?, ?, ?, ? FROM account WHERE upstream_key = ?",
+        )
+        .bind(key)
+        .bind(minutes_from(now, started))
+        .bind(minutes_from(now, observed))
+        .bind(used_fraction)
+        .bind(upstream_key)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn insert_events(pool: &sqlx::SqlitePool, now: Timestamp) -> Result<(), sqlx::Error> {
+    for (index, (upstream_key, model, occurred, failed, cost)) in [
+        ("a1", "claude-opus-4", -2900, false, 5.0),
+        ("a1", "claude-opus-4", -1900, false, 2.0),
+        ("a1", "claude-opus-4", -200, false, 1.0),
+        ("a1", "claude-sonnet-4", -200, false, 5.0),
+        ("a1", "claude-opus-4", -30, false, 0.5),
+        ("a1", "claude-sonnet-4", -30, false, 2.0),
+        ("a2", "gpt-5", -410, false, 1.0),
+        ("a2", "gpt-5", -100, false, 1.0),
+        ("a2", "gpt-5", -10, false, 1.0),
+        ("a4", "kimi", -120, false, 0.0),
+        ("a4", "kimi", -30, false, 0.0),
+        ("a4", "kimi", -20, false, 0.0),
+        ("a4", "kimi", -10, true, 0.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO usage_event (source_id, account_id, record_hash, upstream_id, \
+             occurred_at, provider, model, endpoint, streamed, status_code, failed, \
+             list_cost_usd) \
+             SELECT source_id, account_id, ?, ?, ?, provider, ?, '/v1/messages', 0, ?, ?, ? \
+             FROM account WHERE upstream_key = ?",
+        )
+        .bind(format!("hash-{index}"))
+        .bind(format!("request-{index}"))
+        .bind(minutes_from(now, occurred))
+        .bind(model)
+        .bind(if failed { 429 } else { 200 })
+        .bind(failed)
+        .bind(cost)
+        .bind(upstream_key)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(())
+}
+
 #[tokio::test]
-async fn an_estimate_adds_what_was_metered_since_the_observation() {
+async fn a_prediction_spends_the_learned_rate_and_carries_a_reset_window_forward() {
     let calls = Calls::default();
     let (client, state) = service(&calls).await.expect("a service");
     client
@@ -457,74 +564,10 @@ async fn an_estimate_adds_what_was_metered_since_the_observation() {
         .await
         .assert_status_is_ok();
     let now = Timestamp::now();
-    let at =
-        |minutes: i64| StoredTimestamp::from(now + SignedDuration::from_mins(minutes)).to_string();
     let pool = &state.database.pool;
-    for (upstream_key, key, used_fraction, used_value, limit_value, unit, observed, resets) in [
-        ("a1", "five-hour", 0.2, None, None, None, -60, 60),
-        ("a1", "reset", 0.5, None, None, None, -120, -1),
-        ("a1", "untouched", 0.0, None, None, None, -60, 60),
-        (
-            "a4",
-            "limit-0",
-            0.1,
-            Some(10.0),
-            Some(100.0),
-            Some("requests"),
-            -60,
-            60,
-        ),
-    ] {
-        sqlx::query(
-            "INSERT INTO quota_window (account_id, window_key, label, used_fraction, \
-             used_value, limit_value, unit, window_seconds, resets_at, observed_at) \
-             SELECT account_id, ?, ?, ?, ?, ?, ?, 18000, ?, ? FROM account \
-             WHERE upstream_key = ?",
-        )
-        .bind(key)
-        .bind(key)
-        .bind(used_fraction)
-        .bind(used_value)
-        .bind(limit_value)
-        .bind(unit)
-        .bind(at(resets))
-        .bind(at(observed))
-        .bind(upstream_key)
-        .execute(pool)
-        .await
-        .expect("a window");
-    }
-    // The five-hour window opened four hours ago, so the event of five hours ago is not in it.
-    for (index, (upstream_key, occurred, failed, cost)) in [
-        ("a1", -300, false, 100.0),
-        ("a1", -120, false, 1.0),
-        ("a1", -30, false, 0.5),
-        ("a4", -120, false, 0.0),
-        ("a4", -30, false, 0.0),
-        ("a4", -20, false, 0.0),
-        ("a4", -10, true, 0.0),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        sqlx::query(
-            "INSERT INTO usage_event (source_id, account_id, record_hash, upstream_id, \
-             occurred_at, provider, model, endpoint, streamed, status_code, failed, \
-             list_cost_usd) \
-             SELECT source_id, account_id, ?, ?, ?, provider, 'model', '/v1/messages', 0, ?, ?, ? \
-             FROM account WHERE upstream_key = ?",
-        )
-        .bind(format!("hash-{index}"))
-        .bind(format!("request-{index}"))
-        .bind(at(occurred))
-        .bind(if failed { 429 } else { 200 })
-        .bind(failed)
-        .bind(cost)
-        .bind(upstream_key)
-        .execute(pool)
-        .await
-        .expect("an event");
-    }
+    insert_windows(pool, now).await.expect("windows");
+    insert_samples(pool, now).await.expect("samples");
+    insert_events(pool, now).await.expect("events");
 
     let listed = client
         .get("/api/quota")
@@ -535,14 +578,61 @@ async fn an_estimate_adds_what_was_metered_since_the_observation() {
         .value()
         .deserialize::<Value>();
     let claude = by_provider(&listed, "claude");
-    let estimate = |window: &Value| window["estimated_used_fraction"].as_f64();
+    let predicted = |window: &Value| window["prediction"]["used_fraction"].as_f64();
+    let close = |value: Option<f64>, expected: f64| {
+        value.is_some_and(|value| (value - expected).abs() < 1e-9)
+    };
 
-    let five_hour = estimate(window(claude, "five-hour")).expect("a five-hour estimate");
-    assert!((five_hour - 0.3).abs() < 1e-9, "estimated {five_hour}");
-    assert_eq!(estimate(window(claude, "reset")), None);
-    assert_eq!(estimate(window(claude, "untouched")), None);
-    let kimi = estimate(window(by_provider(&listed, "kimi"), "limit-0")).expect("a kimi estimate");
-    assert!((kimi - 0.12).abs() < 1e-9, "estimated {kimi}");
+    let opus = window(claude, "opus");
+    assert!(close(predicted(opus), 0.3), "predicted {opus}");
+    assert_eq!(opus["prediction"]["has_reset"], false);
+    assert!(
+        close(opus["calibration"]["fraction_per_usd"].as_f64(), 0.2),
+        "calibrated {opus}"
+    );
+    assert_eq!(opus["calibration"]["windows"], 3);
+    assert_eq!(
+        opus["calibration"]["outliers"].as_array().map(Vec::len),
+        Some(1)
+    );
+
+    // The sonnet window reset half an hour ago and the next one began right away.
+    let sonnet = window(claude, "sonnet");
+    assert!(close(predicted(sonnet), 0.2), "predicted {sonnet}");
+    assert_eq!(sonnet["prediction"]["has_reset"], true);
+    assert_eq!(
+        sonnet["prediction"]["resets_at"].as_str(),
+        Some(
+            now.checked_add(SignedDuration::from_mins(270))
+                .expect("an instant")
+                .to_string()
+                .as_str()
+        )
+    );
+
+    assert_eq!(window(claude, "untouched")["prediction"], Value::Null);
+    assert_eq!(window(claude, "cowork")["prediction"], Value::Null);
+    assert_eq!(window(claude, "cowork")["calibration"], Value::Null);
+
+    // The five-hour window reset two hours ago and the next opened at the request 100 minutes ago.
+    let codex = by_provider(&listed, "codex");
+    let five_hour = window(codex, "five-hour");
+    assert!(close(predicted(five_hour), 0.2), "predicted {five_hour}");
+    let resets_at = five_hour["prediction"]["resets_at"]
+        .as_str()
+        .and_then(|at| at.parse::<Timestamp>().ok())
+        .expect("a predicted reset");
+    assert_eq!(resets_at.as_second() % 3600, 0);
+    assert!(
+        resets_at > now + SignedDuration::from_mins(140)
+            && resets_at <= now + SignedDuration::from_mins(200)
+    );
+    let idle = window(codex, "idle");
+    assert!(close(predicted(idle), 0.0), "predicted {idle}");
+    assert_eq!(idle["prediction"]["resets_at"], Value::Null);
+
+    let kimi = predicted(window(by_provider(&listed, "kimi"), "limit-0"));
+    assert!(close(kimi, 0.12), "predicted {kimi:?}");
 }
 
 #[tokio::test]

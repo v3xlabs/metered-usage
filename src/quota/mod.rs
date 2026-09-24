@@ -5,8 +5,10 @@
 //! official management UI does, and runs only when asked. CLIProxy keeps nothing of a hard
 //! refresh, so the windows stored here are the only record of it.
 
+pub mod calibration;
 pub mod credential;
 pub mod management;
+pub mod prediction;
 pub mod provider;
 pub mod window;
 
