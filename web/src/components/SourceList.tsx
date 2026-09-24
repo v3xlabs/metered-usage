@@ -5,6 +5,7 @@ import { formatExact, formatMoment, formatOptionalMoment } from "../domain/forma
 import { redact } from "../domain/privacy";
 import type { CollectorStatus } from "../domain/source";
 import { collectorStatus, collectorStatusLabel, SOURCE_KIND_LABELS } from "../domain/source";
+import { BUTTON } from "./Control";
 
 const TERM = "text-slate-500 dark:text-slate-500";
 const DETAIL = "text-slate-600 tabular-nums dark:text-slate-300";
@@ -50,7 +51,7 @@ const SourceRow = (properties: { source: Source; isSelected: boolean; onSelect: 
         type="button"
         aria-pressed={properties.isSelected ? "true" : "false"}
         onClick={properties.onSelect}
-        class="rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover dark:text-slate-300"
+        class={BUTTON}
       >
         Dead letters
       </button>

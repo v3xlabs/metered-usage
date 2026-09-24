@@ -3,7 +3,7 @@ import { createMemo } from "solid-js";
 
 import type { AnalyticsFilters, AnalyticsScope, Bucket, FilterDimension } from "../api/analytics";
 import { fetchDimensions } from "../api/analytics";
-import type { RangePreset } from "../domain/analytics";
+import type { FixedRange, RangePreset } from "../domain/analytics";
 import { autoBucket, BUCKETS, EMPTY_FILTERS, RANGE_PRESETS, resolveWindow, utcOffsetMinutes } from "../domain/analytics";
 
 type ScopeSearch = {
@@ -60,9 +60,7 @@ export const createAnalyticsScope = () => {
     filters,
     scope,
     dimensions,
-    chooseRange: (next: RangePreset): void => setSearch(next === "custom"
-      ? { range: next, from: usageWindow().firstDay, to: usageWindow().lastDay, bucket: undefined }
-      : { range: next, from: undefined, to: undefined, bucket: undefined }),
+    chooseRange: (next: FixedRange): void => setSearch({ range: next, from: undefined, to: undefined, bucket: undefined }),
     chooseCustom: (firstDay: string, lastDay: string): void => setSearch({ range: "custom", from: firstDay, to: lastDay }),
     chooseBucket: (next: Bucket | undefined): void => setSearch({ bucket: next }),
     chooseFilter: (dimension: FilterDimension, values: readonly string[]): void =>

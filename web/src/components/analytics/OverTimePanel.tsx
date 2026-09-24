@@ -1,3 +1,4 @@
+import { TbOutlineChartArea, TbOutlineChartBar } from "solid-icons/tb";
 import { createMemo, createUniqueId, For, isPending, Show } from "solid-js";
 
 import type { AnalyticsScope, Bucket, Dimensions, FilterDimension } from "../../api/analytics";
@@ -6,16 +7,18 @@ import type { Measure } from "../../domain/analytics";
 import { BUCKET_LABELS, BUCKETS, DIMENSION_LABELS, FILTER_DIMENSIONS, labelKey, measureOf, rankByOf } from "../../domain/analytics";
 import type { ChartFormat, ChartMode } from "../charts/TimeSeriesChart";
 import { colorFor, TimeSeriesChart } from "../charts/TimeSeriesChart";
+import { Select } from "../Control";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
+import type { SegmentOption } from "./Segmented";
 import { Segmented } from "./Segmented";
 
 export type StackMode = Exclude<ChartMode, "line">;
 
 const DIMENSION_OPTIONS = FILTER_DIMENSIONS.map(dimension => ({ value: dimension, label: DIMENSION_LABELS[dimension] }));
-const MODE_OPTIONS: readonly { value: StackMode; label: string; }[] = [
-  { value: "stacked-bar", label: "Bars" },
-  { value: "stacked-area", label: "Area" },
+const MODE_OPTIONS: readonly SegmentOption<StackMode>[] = [
+  { value: "stacked-bar", label: "Bars", icon: TbOutlineChartBar },
+  { value: "stacked-area", label: "Area", icon: TbOutlineChartArea },
 ];
 
 export const BucketChoice = (properties: {
@@ -26,22 +29,17 @@ export const BucketChoice = (properties: {
   const controlId = createUniqueId();
 
   return (
-    <div class="flex items-center gap-1.5">
-      <label for={controlId} class="text-xs text-slate-500 dark:text-slate-400">Bucket</label>
-      <select
-        id={controlId}
+    <>
+      <label for={controlId} class="sr-only">Bucket</label>
+      <Select
+        controlId={controlId}
         value={properties.bucket ?? "auto"}
-        onChange={(event) => {
-          const chosen = event.currentTarget.value;
-
-          properties.onChoose(BUCKETS.find(bucket => bucket === chosen));
-        }}
-        class="rounded-control bg-raised px-2 py-1 text-xs text-slate-900 dark:text-slate-100"
+        onChange={chosen => properties.onChoose(BUCKETS.find(bucket => bucket === chosen))}
       >
         <option value="auto">{`Auto (${BUCKET_LABELS[properties.autoBucket].toLowerCase()})`}</option>
         <For each={BUCKETS}>{bucket => <option value={bucket}>{BUCKET_LABELS[bucket]}</option>}</For>
-      </select>
-    </div>
+      </Select>
+    </>
   );
 };
 

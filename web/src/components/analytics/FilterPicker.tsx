@@ -2,6 +2,7 @@ import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "
 
 import type { FilterDimension } from "../../api/analytics";
 import { labelKey } from "../../domain/analytics";
+import { Chevron } from "../Control";
 import { ProviderIcon } from "../ProviderIcon";
 
 export type PickerOption = { value: string; label: string; provider?: string | undefined; };
@@ -85,14 +86,15 @@ export const FilterPicker = (properties: {
     >
       <summary
         class={[
-          "flex list-none items-center gap-1.5 rounded-control px-2.5 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-blue-500 [&::-webkit-details-marker]:hidden",
+          "flex h-8 list-none items-center gap-1.5 rounded-control px-2.5 text-sm whitespace-nowrap focus-visible:outline-2 focus-visible:outline-blue-500 [&::-webkit-details-marker]:hidden",
           properties.selected.length > 0
             ? "bg-blue-50 text-blue-800 dark:bg-blue-950 dark:text-blue-200"
-            : "bg-raised text-slate-700 hover:bg-raised-hover dark:text-slate-300",
+            : "bg-raised text-slate-900 hover:bg-raised-hover dark:text-slate-100",
         ]}
       >
         <span class="text-slate-600 dark:text-slate-400">{properties.label}</span>
         <span class="max-w-40 truncate font-medium">{summary()}</span>
+        <Chevron />
       </summary>
       <div class="absolute inset-x-0 z-20 mt-1 space-y-2 rounded-panel bg-surface p-2 shadow-lg ring-1 ring-hairline sm:right-auto sm:w-72">
         <div class="flex items-center gap-2">

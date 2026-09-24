@@ -1,9 +1,9 @@
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, Errored, Loading, refresh, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, refresh, Show } from "solid-js";
 
 import type { PriceSync } from "../api/prices";
 import { listPrices, repricePrices, syncPrices } from "../api/prices";
-import { Choice } from "../components/Choice";
+import { BUTTON, CONTROL, DANGER_BUTTON, FIELD, FIELD_LABEL, Select } from "../components/Control";
 import { ManualPriceForm } from "../components/ManualPriceForm";
 import { PriceTable } from "../components/PriceTable";
 import { RegionFailure, RegionPending } from "../components/Region";
@@ -12,9 +12,6 @@ import { formatExact } from "../domain/format";
 import { PRICE_ORIGIN_LABELS, PRICE_ORIGINS } from "../domain/price";
 import { redact } from "../domain/privacy";
 
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
-const FIELD = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
-const FIELD_LABEL = "block text-xs font-medium text-slate-600 dark:text-slate-400";
 const FAILURE_TEXT = "text-sm text-red-600 dark:text-red-400";
 
 const ORIGIN_OPTIONS = [
@@ -51,7 +48,7 @@ const SyncControl = (properties: { onSynced: () => void; }) => {
         type="button"
         disabled={isSyncing()}
         onClick={() => void sync()}
-        class={CONTROL_BUTTON}
+        class={BUTTON}
       >
         {isSyncing() ? "Syncing..." : "Sync prices"}
       </button>
@@ -138,13 +135,13 @@ const RepriceControl = () => {
         </div>
         <Show
           when={isConfirming()}
-          fallback={<button type="button" onClick={() => setIsConfirming(true)} class={CONTROL_BUTTON}>Reprice</button>}
+          fallback={<button type="button" onClick={() => setIsConfirming(true)} class={BUTTON}>Reprice</button>}
         >
           <button
             type="button"
             disabled={isRepricing()}
             onClick={() => void reprice()}
-            class="rounded-control bg-red-600 px-2.5 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+            class={DANGER_BUTTON}
           >
             {isRepricing() ? "Repricing..." : "Confirm reprice"}
           </button>
@@ -152,7 +149,7 @@ const RepriceControl = () => {
             type="button"
             disabled={isRepricing()}
             onClick={() => setIsConfirming(false)}
-            class={CONTROL_BUTTON}
+            class={BUTTON}
           >
             Cancel
           </button>
@@ -192,32 +189,32 @@ export const PricesPage = () => {
 
   return (
     <div class="space-y-6">
-      <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="flex flex-wrap items-center justify-between gap-4">
         <h1 class="text-lg font-semibold">Prices</h1>
-        <div class="flex flex-wrap items-end gap-4">
-          <div class="space-y-1">
-            <label for="prices-model" class={FIELD_LABEL}>Model filter</label>
-            <input
-              id="prices-model"
-              type="search"
-              value={model()}
-              placeholder="Any model"
-              onChange={event => setSearchParameters({ model: event.currentTarget.value.trim() === "" ? null : event.currentTarget.value.trim() })}
-              class={FIELD}
-            />
-          </div>
-          <Choice
-            controlId="prices-origin"
-            label="Origin"
-            value={origin() ?? ""}
-            options={ORIGIN_OPTIONS}
-            onChoose={value => setSearchParameters({ origin: value === "" ? null : value })}
+        <div class="flex flex-wrap items-center gap-3">
+          <label for="prices-model" class="sr-only">Model filter</label>
+          <input
+            id="prices-model"
+            type="search"
+            value={model()}
+            placeholder="Any model"
+            onChange={event => setSearchParameters({ model: event.currentTarget.value.trim() === "" ? null : event.currentTarget.value.trim() })}
+            class={[CONTROL, "px-2.5 placeholder:text-slate-500"]}
           />
-          <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <label for="prices-origin" class="sr-only">Origin</label>
+          <Select
+            controlId="prices-origin"
+            value={origin() ?? ""}
+            onChange={value => setSearchParameters({ origin: value === "" ? null : value })}
+          >
+            <For each={ORIGIN_OPTIONS}>{option => <option value={option.value}>{option.label}</option>}</For>
+          </Select>
+          <label class="flex h-8 items-center gap-2 px-1 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
               checked={isHistory()}
               onInput={event => setSearchParameters({ history: event.currentTarget.checked ? "true" : null })}
+              class="size-4 accent-blue-600"
             />
             History
           </label>

@@ -4,9 +4,7 @@ import type { PriceInput } from "../api/prices";
 import { createPrice } from "../api/prices";
 import { localInstant } from "../domain/dateInput";
 import { redact } from "../domain/privacy";
-
-const FIELD = "w-full rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
-const FIELD_LABEL = "block text-xs font-medium text-slate-600 dark:text-slate-400";
+import { FIELD, FIELD_LABEL } from "./Control";
 
 const TEXT_FIELDS = [
   { name: "model", label: "Model", isRequired: true },
@@ -85,7 +83,7 @@ export const ManualPriceForm = (properties: { onCreated: () => void; }) => {
                 name={field.name}
                 type="text"
                 required={field.isRequired}
-                class={FIELD}
+                class={["w-full", FIELD]}
               />
             </div>
           )}
@@ -99,7 +97,7 @@ export const ManualPriceForm = (properties: { onCreated: () => void; }) => {
             min="0"
             step="1"
             placeholder="0"
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
         <div class="space-y-1">
@@ -108,7 +106,7 @@ export const ManualPriceForm = (properties: { onCreated: () => void; }) => {
             id="price-effective-from"
             name="effective_from"
             type="datetime-local"
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
         <For each={RATE_FIELDS}>
@@ -122,7 +120,7 @@ export const ManualPriceForm = (properties: { onCreated: () => void; }) => {
                 required
                 min="0"
                 step="any"
-                class={FIELD}
+                class={["w-full", FIELD]}
               />
             </div>
           )}

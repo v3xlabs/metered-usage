@@ -284,15 +284,7 @@ const AccountsSection = () => {
   };
 
   return (
-    <section class="space-y-3" aria-labelledby="accounts-heading">
-      <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 id="accounts-heading" class="text-sm font-semibold text-slate-700 dark:text-slate-300">Accounts</h2>
-        <p class="text-xs text-slate-500 dark:text-slate-400">
-          Subscription plans are managed on
-          {" "}
-          <a href="/usage/plans" class="text-slate-700 underline underline-offset-2 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100">Plan leverage</a>
-        </p>
-      </div>
+    <section aria-label="Accounts">
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
         <Loading fallback={<RegionPending label="Loading accounts" />}>
           <Show
@@ -303,7 +295,7 @@ const AccountsSection = () => {
               <For each={groupBySource(accounts(), account => account)} keyed={group => group.sourceId}>
                 {group => (
                   <section class="space-y-2" aria-label={`Accounts of ${redact(group().sourceName)}`}>
-                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group().sourceName)}</h3>
+                    <h2 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group().sourceName)}</h2>
                     <ul class="divide-y divide-hairline overflow-hidden rounded-panel bg-surface">
                       <For each={group().entries} keyed={account => account.account_id}>
                         {account => (

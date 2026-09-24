@@ -1,4 +1,5 @@
 import { redact } from "../domain/privacy";
+import { BUTTON } from "./Control";
 
 export const RegionPending = (properties: { label: string; }) => (
   <p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500" role="status">{properties.label}</p>
@@ -12,7 +13,7 @@ export const RegionFailure = (properties: { error: unknown; retry: () => void; }
     <button
       type="button"
       onClick={properties.retry}
-      class="rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover dark:text-slate-300"
+      class={BUTTON}
     >
       Try again
     </button>

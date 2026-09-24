@@ -95,21 +95,23 @@ export const CachePanel = (properties: {
               : `Caching saved ${formatUsd(properties.breakdown.total.cache_savings_usd)} versus a no-cache baseline.`}
             {` At list price, cache reads cost ${formatUsd(properties.breakdown.total.cache_read_cost_usd)} and cache writes ${formatUsd(properties.breakdown.total.cache_write_cost_usd)}.`}
           </p>
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="text-xs text-slate-500 dark:text-slate-400">
-                <th scope="col" class="w-full pb-1 text-left font-normal">{DIMENSION_LABELS[properties.dimension]}</th>
-                <th scope="col" class="pr-3 pb-1 text-right font-normal whitespace-nowrap">Hit rate</th>
-                <th scope="col" class="pb-1 text-right font-normal">Savings</th>
-              </tr>
-            </thead>
-            <tbody>
-              <CacheRow label={{ text: "All usage" }} metrics={properties.breakdown.total} isTotal />
-              <For each={properties.breakdown.rows.slice(0, GROUP_ROWS)}>
-                {row => <CacheRow label={labelKey(properties.dimension, row.key, properties.dimensions)} metrics={row.metrics} />}
-              </For>
-            </tbody>
-          </table>
+          <div class="max-h-80 overflow-y-auto">
+            <table class="w-full text-sm">
+              <thead class="sticky top-0 z-10 bg-surface">
+                <tr class="text-xs text-slate-500 dark:text-slate-400">
+                  <th scope="col" class="w-full pb-1 text-left font-normal">{DIMENSION_LABELS[properties.dimension]}</th>
+                  <th scope="col" class="pr-3 pb-1 text-right font-normal whitespace-nowrap">Hit rate</th>
+                  <th scope="col" class="pb-1 text-right font-normal">Savings</th>
+                </tr>
+              </thead>
+              <tbody>
+                <CacheRow label={{ text: "All usage" }} metrics={properties.breakdown.total} isTotal />
+                <For each={properties.breakdown.rows.slice(0, GROUP_ROWS)}>
+                  {row => <CacheRow label={labelKey(properties.dimension, row.key, properties.dimensions)} metrics={row.metrics} />}
+                </For>
+              </tbody>
+            </table>
+          </div>
         </div>
       </Show>
     </Stale>

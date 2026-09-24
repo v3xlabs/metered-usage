@@ -20,17 +20,20 @@ export const DIMENSION_LABELS: Record<FilterDimension, string> = {
 
 export const EMPTY_FILTERS: AnalyticsFilters = { model: [], provider: [], account: [], harness: [], source: [] };
 
-export const RANGE_PRESETS = ["today", "7d", "30d", "90d", "mtd", "custom"] as const;
+export const FIXED_RANGES = ["today", "7d", "30d", "90d", "mtd"] as const;
+
+export type FixedRange = (typeof FIXED_RANGES)[number];
+
+export const RANGE_PRESETS = [...FIXED_RANGES, "custom"] as const;
 
 export type RangePreset = (typeof RANGE_PRESETS)[number];
 
-export const RANGE_LABELS: Record<RangePreset, string> = {
+export const RANGE_LABELS: Record<FixedRange, string> = {
   "today": "Today",
-  "7d": "7d",
-  "30d": "30d",
-  "90d": "90d",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
   "mtd": "Month to date",
-  "custom": "Custom range",
 };
 
 const PRESET_DAYS: Record<"today" | "7d" | "30d" | "90d", number> = { "today": 1, "7d": 7, "30d": 30, "90d": 90 };
@@ -97,12 +100,12 @@ export const rankByOf = (measure: Measure): RankBy => {
   return measure.basis === "list" ? "list_cost_usd" : "billed_cost_usd";
 };
 
-// A local calendar day as the `date` input spells it.
-const localDay = (instant: Date): string =>
+// A local calendar day spelled `YYYY-MM-DD`.
+export const localDay = (instant: Date): string =>
   new Date(instant.getTime() - instant.getTimezoneOffset() * 60_000).toISOString()
     .slice(0, ISO_DAY_LENGTH);
 
-const localMidnight = (day: string): Date => new Date(`${day}T00:00:00`);
+export const localMidnight = (day: string): Date => new Date(`${day}T00:00:00`);
 
 const addDays = (day: string, days: number): string => {
   const midnight = localMidnight(day);

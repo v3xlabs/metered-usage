@@ -5,6 +5,7 @@ import { fetchSummary } from "../../api/analytics";
 import type { CostBasis, KeyLabel, TokenKind } from "../../domain/analytics";
 import { cacheHitRate, costOf, DIMENSION_LABELS, dimensionKeys, FILTER_DIMENSIONS, labelKey, tokensOf } from "../../domain/analytics";
 import { formatCompact, formatExact, formatLatency, formatSpeed, formatUsd } from "../../domain/format";
+import { Select } from "../Control";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
 
@@ -40,34 +41,30 @@ const SliceChoice = (properties: {
       <legend class="text-xs font-medium text-slate-600 dark:text-slate-400">{properties.side}</legend>
       <div class="flex min-w-0 flex-wrap gap-2">
         <label for={dimensionId} class="sr-only">{`${properties.side} dimension`}</label>
-        <select
-          id={dimensionId}
+        <Select
+          controlId={dimensionId}
           value={dimension()}
-          onChange={(event) => {
-            const chosen = event.currentTarget.value;
+          onChange={(chosen) => {
             const next = FILTER_DIMENSIONS.find(candidate => candidate === chosen) ?? "model";
             const [first] = dimensionKeys(next, properties.dimensions);
 
             properties.onChoose(first === undefined ? undefined : { dimension: next, value: first });
           }}
-          class="rounded-control bg-raised px-2 py-1 text-sm text-slate-900 dark:text-slate-100"
         >
           <For each={FILTER_DIMENSIONS}>{option => <option value={option}>{DIMENSION_LABELS[option]}</option>}</For>
-        </select>
+        </Select>
         <label for={valueId} class="sr-only">{`${properties.side} value`}</label>
-        <select
-          id={valueId}
+        <Select
+          controlId={valueId}
           value={properties.slice?.value ?? ""}
-          onChange={event => properties.onChoose(event.currentTarget.value === ""
-            ? undefined
-            : { dimension: dimension(), value: event.currentTarget.value })}
-          class="max-w-64 min-w-0 flex-1 rounded-control bg-raised px-2 py-1 text-sm text-slate-900 dark:text-slate-100"
+          onChange={chosen => properties.onChoose(chosen === "" ? undefined : { dimension: dimension(), value: chosen })}
+          class="max-w-64 flex-1"
         >
           <option value="">Choose a value</option>
           <For each={dimensionKeys(dimension(), properties.dimensions)}>
             {key => <option value={key}>{labelKey(dimension(), key, properties.dimensions).text}</option>}
           </For>
-        </select>
+        </Select>
       </div>
     </fieldset>
   );
