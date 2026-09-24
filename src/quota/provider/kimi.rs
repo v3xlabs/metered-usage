@@ -146,6 +146,7 @@ fn row(
         window_seconds,
         resets_at,
         label,
+        ..NewWindow::default()
     })
 }
 

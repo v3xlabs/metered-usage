@@ -310,6 +310,7 @@ fn billing_windows(config: &Value) -> Option<Vec<NewWindow>> {
             unit: Some(CENTS),
             window_seconds: span(billing_start, billing_end),
             resets_at: billing_end,
+            ..NewWindow::default()
         });
     }
     if let Some(cap) = on_demand_cap {
@@ -328,6 +329,7 @@ fn billing_windows(config: &Value) -> Option<Vec<NewWindow>> {
             unit: Some(CENTS),
             window_seconds: span(billing_start, billing_end),
             resets_at: billing_end,
+            ..NewWindow::default()
         });
     }
 

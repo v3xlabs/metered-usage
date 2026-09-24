@@ -8,7 +8,9 @@ use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::account::AccountSummaryOutput;
 use crate::prelude::*;
+use crate::quota::calibration::{Calibration, Outlier};
 use crate::quota::credential::{Cooldown, QuotaAccount};
+use crate::quota::prediction::Prediction;
 use crate::quota::window::QuotaWindow;
 use crate::quota::{RefreshRequestError, SourceFailure};
 
@@ -147,10 +149,13 @@ pub struct QuotaWindowOutput {
     /// When the provider said the window resets.
     resets_at: Option<String>,
     observed_at: String,
-    /// Share of the window estimated used by now: `used_fraction` plus what this service
-    /// metered on the account since `observed_at`. Absent when that usage cannot be related
-    /// to the window, or once the window has reset.
-    estimated_used_fraction: Option<f64>,
+    /// What the window holds now, from the report and the usage this service metered since.
+    /// Absent when nothing was metered since a report that still holds, or when nothing
+    /// relates metered usage to the window.
+    prediction: Option<QuotaPredictionOutput>,
+    /// How much of the window one list dollar spends, learned from the windows reported
+    /// over the last four weeks.
+    calibration: Option<QuotaCalibrationOutput>,
 }
 
 impl From<QuotaWindow> for QuotaWindowOutput {
@@ -165,7 +170,72 @@ impl From<QuotaWindow> for QuotaWindowOutput {
             window_seconds: window.window_seconds,
             resets_at: window.resets_at.map(|at| at.0.to_string()),
             observed_at: window.observed_at.to_string(),
-            estimated_used_fraction: window.estimated_used_fraction,
+            prediction: window.prediction.map(QuotaPredictionOutput::from),
+            calibration: window.calibration.map(QuotaCalibrationOutput::from),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "QuotaPrediction", skip_serializing_if_is_none)]
+pub struct QuotaPredictionOutput {
+    /// Share of the window used by now, 0 to 1.
+    used_fraction: f64,
+    /// When the window that holds now resets. Absent for a window that opens on its next
+    /// request and has had none since it reset.
+    resets_at: Option<String>,
+    /// The window reset after the report, so the report no longer describes it.
+    has_reset: bool,
+}
+
+impl From<Prediction> for QuotaPredictionOutput {
+    fn from(prediction: Prediction) -> Self {
+        Self {
+            used_fraction: prediction.used_fraction,
+            resets_at: prediction.resets_at.map(|at| at.to_string()),
+            has_reset: prediction.has_reset,
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "QuotaCalibration")]
+pub struct QuotaCalibrationOutput {
+    /// The median share of the window one list dollar spent.
+    fraction_per_usd: f64,
+    /// The windows the median was taken over.
+    windows: u32,
+    /// Windows whose share per dollar is off the median by more than a factor of two, such
+    /// as one the provider reset early. Newest first.
+    outliers: Vec<QuotaOutlierOutput>,
+}
+
+impl From<Calibration> for QuotaCalibrationOutput {
+    fn from(calibration: Calibration) -> Self {
+        Self {
+            fraction_per_usd: calibration.fraction_per_usd,
+            windows: u32::try_from(calibration.windows).unwrap_or(u32::MAX),
+            outliers: calibration
+                .outliers
+                .into_iter()
+                .map(QuotaOutlierOutput::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "QuotaOutlier")]
+pub struct QuotaOutlierOutput {
+    started_at: String,
+    fraction_per_usd: f64,
+}
+
+impl From<Outlier> for QuotaOutlierOutput {
+    fn from(outlier: Outlier) -> Self {
+        Self {
+            started_at: outlier.started_at.to_string(),
+            fraction_per_usd: outlier.fraction_per_usd,
         }
     }
 }

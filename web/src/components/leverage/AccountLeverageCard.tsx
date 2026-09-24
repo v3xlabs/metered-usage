@@ -1,9 +1,10 @@
 import { TbOutlineCreditCard } from "solid-icons/tb";
-import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Match, Show, Switch } from "solid-js";
 
 import type { LeveragePeriod } from "../../api/leverage";
+import type { QuotaCalibration, QuotaWindow } from "../../api/quota";
 import { accountLabel } from "../../domain/account";
-import { formatLeverage, formatUsd, formatUtcDay } from "../../domain/format";
+import { formatLeverage, formatMoment, formatUsd, formatUtcDay } from "../../domain/format";
 import type { AccountLeverage, PlanHistory } from "../../domain/leverage";
 import { hasHistory, isBreakingEven, periodProgress, periodText, planTotals } from "../../domain/leverage";
 import { AccountName, AuthKindIcon } from "../AccountName";
@@ -89,11 +90,47 @@ const ActivePlan = (properties: { history: PlanHistory; nowMs: number; }) => {
   );
 };
 
+const outlierText = (label: string, calibration: QuotaCalibration): string =>
+  [
+    `${label} windows that held far more or less than the ${formatUsd(1 / calibration.fraction_per_usd)} median, such as one reset early after an incident:`,
+    ...calibration.outliers.map(outlier => `Started ${formatMoment(outlier.started_at)}: ${formatUsd(1 / outlier.fraction_per_usd)}`),
+  ].join("\n");
+
+// How much list usage one full window holds, learned from the windows of the last four weeks.
+const WindowValues = (properties: { windows: readonly QuotaWindow[]; }) => {
+  const calibrated = createMemo(() =>
+    properties.windows.flatMap(window => (window.calibration === undefined ? [] : [{ label: window.label, calibration: window.calibration }])));
+
+  return (
+    <Show when={calibrated().length > 0}>
+      <ul class="flex flex-wrap gap-x-3 gap-y-1 border-t border-hairline pt-2.5 text-xs text-slate-500 tabular-nums dark:text-slate-400">
+        <For each={calibrated()}>
+          {entry => (
+            <li
+              class="flex items-baseline gap-1 whitespace-nowrap"
+              title={`One full ${entry.label} window holds about ${formatUsd(1 / entry.calibration.fraction_per_usd)} of list usage: the median over ${entry.calibration.windows} ${entry.calibration.windows === 1 ? "window" : "windows"} of the last four weeks`}
+            >
+              <span>{entry.label}</span>
+              <span class="text-slate-700 dark:text-slate-300">{`≈ ${formatUsd(1 / entry.calibration.fraction_per_usd)}`}</span>
+              <Show when={entry.calibration.outliers.length > 0}>
+                <span class="text-amber-700 dark:text-amber-400" title={outlierText(entry.label, entry.calibration)}>
+                  {`${entry.calibration.outliers.length} ${entry.calibration.outliers.length === 1 ? "outlier" : "outliers"}`}
+                </span>
+              </Show>
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+  );
+};
+
 export const AccountLeverageCard = (properties: {
   entry: AccountLeverage;
   isSourceShown: boolean;
   isSelected: boolean;
   nowMs: number;
+  windows: readonly QuotaWindow[] | undefined;
   onSelect: () => void;
   onChanged: () => void;
 }) => {
@@ -164,6 +201,13 @@ export const AccountLeverageCard = (properties: {
           <p class="text-sm text-slate-500 dark:text-slate-500">No active plan.</p>
         </Match>
       </Switch>
+      <Errored fallback={null}>
+        <Loading fallback={null}>
+          <Show when={properties.windows}>
+            {windows => <WindowValues windows={windows()} />}
+          </Show>
+        </Loading>
+      </Errored>
       <PlanDialog
         account={properties.entry.account}
         editing={editing()}

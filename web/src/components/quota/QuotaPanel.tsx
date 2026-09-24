@@ -1,7 +1,7 @@
 import { useSearchParams } from "@solidjs/router";
 import { TbOutlineCloudDownload, TbOutlineRefresh } from "solid-icons/tb";
 import type { Accessor } from "solid-js";
-import { createMemo, createSignal, Errored, For, Loading, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanup, Show } from "solid-js";
 
 import type { AccountHealthStrip } from "../../api/accountHealth";
 import type { QuotaAccount } from "../../api/quota";
@@ -20,6 +20,9 @@ import { QuotaCard } from "./QuotaCard";
 // the database and never reaches a provider.
 const REREAD_INTERVAL_MS = 60_000;
 const CLOCK_INTERVAL_MS = 1000;
+// The reset has to have passed on the server's clock too before the re-read can see it.
+const RESET_SETTLE_MS = 2000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const AGE_TEXT = "text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400";
 
@@ -111,6 +114,20 @@ export const QuotaPanel = () => {
     soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
     hard: latestMoment(accounts().map(entry => entry.hard_refreshed_at)),
   }));
+  // The next moment a window resets, as reported or as predicted after an earlier reset.
+  const nextResetMs = createMemo(() => {
+    const nowMs = Date.now();
+    const resets = accounts()
+      .flatMap(entry => entry.windows)
+      .flatMap((window) => {
+        const resetsAt = window.prediction?.has_reset === true ? window.prediction.resets_at : window.resets_at;
+
+        return resetsAt === undefined ? [] : [Date.parse(resetsAt)];
+      })
+      .filter(resetMs => resetMs > nowMs);
+
+    return resets.length > 0 ? Math.min(...resets) : undefined;
+  });
 
   const reread = async (): Promise<void> => {
     const result = await fetchQuota();
@@ -164,6 +181,18 @@ export const QuotaPanel = () => {
 
   const clock = setInterval(() => setNowMs(Date.now()), CLOCK_INTERVAL_MS);
   const rereadTimer = setInterval(() => void reread(), REREAD_INTERVAL_MS);
+
+  // So a window that resets shows its prediction at once rather than at the next re-read.
+  createEffect(
+    () => nextResetMs(),
+    (resetMs) => {
+      if (resetMs === undefined) return;
+
+      const timer = setTimeout(() => void reread(), Math.min(MAX_TIMEOUT_MS, resetMs - Date.now() + RESET_SETTLE_MS));
+
+      return () => clearTimeout(timer);
+    },
+  );
 
   onCleanup(() => {
     clearInterval(clock);

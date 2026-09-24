@@ -874,9 +874,48 @@ export interface components {
             hard_refreshable: boolean;
             windows: components["schemas"]["QuotaWindow"][];
         };
+        /** QuotaCalibration */
+        QuotaCalibration: {
+            /**
+             * Format: double
+             * @description The median share of the window one list dollar spent.
+             */
+            fraction_per_usd: number;
+            /**
+             * Format: uint32
+             * @description The windows the median was taken over.
+             */
+            windows: number;
+            /**
+             * @description Windows whose share per dollar is off the median by more than a factor of two, such
+             *     as one the provider reset early. Newest first.
+             */
+            outliers: components["schemas"]["QuotaOutlier"][];
+        };
         /** QuotaList */
         QuotaList: {
             accounts: components["schemas"]["QuotaAccount"][];
+        };
+        /** QuotaOutlier */
+        QuotaOutlier: {
+            started_at: string;
+            /** Format: double */
+            fraction_per_usd: number;
+        };
+        /** QuotaPrediction */
+        QuotaPrediction: {
+            /**
+             * Format: double
+             * @description Share of the window used by now, 0 to 1.
+             */
+            used_fraction: number;
+            /**
+             * @description When the window that holds now resets. Absent for a window that opens on its next
+             *     request and has had none since it reset.
+             */
+            resets_at?: string;
+            /** @description The window reset after the report, so the report no longer describes it. */
+            has_reset: boolean;
         };
         /** QuotaRefresh */
         QuotaRefresh: {
@@ -918,12 +957,16 @@ export interface components {
             resets_at?: string;
             observed_at: string;
             /**
-             * Format: double
-             * @description Share of the window estimated used by now: `used_fraction` plus what this service
-             *     metered on the account since `observed_at`. Absent when that usage cannot be related
-             *     to the window, or once the window has reset.
+             * @description What the window holds now, from the report and the usage this service metered since.
+             *     Absent when nothing was metered since a report that still holds, or when nothing
+             *     relates metered usage to the window.
              */
-            estimated_used_fraction?: number;
+            prediction?: components["schemas"]["QuotaPrediction"] & unknown;
+            /**
+             * @description How much of the window one list dollar spends, learned from the windows reported
+             *     over the last four weeks.
+             */
+            calibration?: components["schemas"]["QuotaCalibration"] & unknown;
         };
         /** @enum {string} */
         RankBy: "list_cost_usd" | "billed_cost_usd" | "total_tokens" | "requests";

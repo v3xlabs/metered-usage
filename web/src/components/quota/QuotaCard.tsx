@@ -1,9 +1,9 @@
 import { TbOutlineCreditCard, TbOutlineRefresh } from "solid-icons/tb";
 import type { Accessor } from "solid-js";
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 
 import type { AccountHealthStrip } from "../../api/accountHealth";
-import type { QuotaAccount, QuotaWindow } from "../../api/quota";
+import type { QuotaAccount, QuotaPrediction, QuotaWindow } from "../../api/quota";
 import { refreshQuota } from "../../api/quota";
 import { accountDescription, accountLabel, isUnlabelled } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
@@ -66,7 +66,7 @@ const WindowText = (properties: { window: QuotaWindow; nowMs: number; }) => (
 const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; nowMs: number; }) => {
   const percentLeft = createMemo(() => remainingPercent(properties.usedFraction));
   const estimate = createMemo(() => {
-    const estimated = properties.window.estimated_used_fraction;
+    const estimated = properties.window.prediction?.used_fraction;
 
     if (estimated === undefined || estimated <= properties.usedFraction) return undefined;
 
@@ -104,7 +104,10 @@ const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; no
         aria-valuetext={valueText()}
         class="relative h-1.5 overflow-hidden rounded-full bg-raised"
       >
-        <div class={["h-full rounded-full", tone().fill]} style={{ width: `${estimate()?.percentLeft ?? percentLeft()}%` }} />
+        <div
+          class={["h-full rounded-full transition-[width] duration-500", tone().fill]}
+          style={{ width: `${estimate()?.percentLeft ?? percentLeft()}%` }}
+        />
         <Show when={estimate()}>
           {estimated => (
             <div
@@ -123,10 +126,53 @@ const WindowMeter = (properties: { window: QuotaWindow; usedFraction: number; no
   );
 };
 
+// After a reset the report describes a window that is gone, so the whole bar is estimated.
+const ResetWindowMeter = (properties: { window: QuotaWindow; prediction: QuotaPrediction; nowMs: number; }) => {
+  const percentLeft = createMemo(() => remainingPercent(properties.prediction.used_fraction));
+  const tone = createMemo(() => LEVEL_TONES[quotaLevel(percentLeft())]);
+  const reportText = createMemo(() => {
+    const reported = properties.window.used_fraction === undefined ? "" : ` ${Math.round(remainingPercent(properties.window.used_fraction))}% left`;
+
+    return `Estimated from the usage metered since the window reset. Last reported${reported} at ${formatMoment(properties.window.observed_at)}.`;
+  });
+
+  return (
+    <li class="space-y-1">
+      <div class="flex items-baseline justify-between gap-2 text-xs">
+        <span class="truncate text-slate-700 dark:text-slate-300">{properties.window.label}</span>
+        <span class="flex shrink-0 gap-2 tabular-nums" title={reportText()}>
+          <Show when={properties.window.resets_at}>
+            {resetAt => <span class="text-slate-500 dark:text-slate-400">{`Reset ${formatAge(resetAt(), properties.nowMs)}`}</span>}
+          </Show>
+          <span class={["font-medium", tone().text]}>{`≈${Math.round(percentLeft())}% left`}</span>
+        </span>
+      </div>
+      <div
+        role="meter"
+        aria-label={`${properties.window.label} remaining`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percentLeft()}
+        aria-valuetext={`about ${Math.round(percentLeft())}% left since the window reset`}
+        class="relative h-1.5 overflow-hidden rounded-full bg-raised"
+      >
+        <div
+          class={["h-full rounded-full transition-[width] duration-500", tone().dash]}
+          style={{ "width": `${percentLeft()}%`, "background-image": DASHES }}
+        />
+      </div>
+      <div class="flex justify-end text-xs text-slate-500 tabular-nums dark:text-slate-500">
+        <Show when={properties.prediction.resets_at} fallback={<span>Opens on the next request</span>}>
+          {resetsAt => <span title={formatMoment(resetsAt())}>{`Estimated reset ${formatCountdown(resetsAt(), properties.nowMs)}`}</span>}
+        </Show>
+      </div>
+    </li>
+  );
+};
+
 // A window that has used nothing reports a fraction of zero, which must still draw a full bar.
 const WindowRow = (properties: { window: QuotaWindow; nowMs: number; }) => (
-  <Show
-    when={properties.window.used_fraction === undefined ? undefined : { usedFraction: properties.window.used_fraction }}
+  <Switch
     fallback={(
       <li class="space-y-1">
         <p class="truncate text-xs text-slate-700 dark:text-slate-300">{properties.window.label}</p>
@@ -134,8 +180,13 @@ const WindowRow = (properties: { window: QuotaWindow; nowMs: number; }) => (
       </li>
     )}
   >
-    {measured => <WindowMeter window={properties.window} usedFraction={measured().usedFraction} nowMs={properties.nowMs} />}
-  </Show>
+    <Match when={properties.window.prediction?.has_reset === true ? properties.window.prediction : undefined}>
+      {prediction => <ResetWindowMeter window={properties.window} prediction={prediction()} nowMs={properties.nowMs} />}
+    </Match>
+    <Match when={properties.window.used_fraction === undefined ? undefined : { usedFraction: properties.window.used_fraction }}>
+      {measured => <WindowMeter window={properties.window} usedFraction={measured().usedFraction} nowMs={properties.nowMs} />}
+    </Match>
+  </Switch>
 );
 
 export const QuotaCard = (properties: {
