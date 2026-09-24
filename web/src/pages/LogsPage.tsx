@@ -1,12 +1,12 @@
 import { useSearchParams } from "@solidjs/router";
-import { createMemo, createSignal, Errored, Loading, onCleanup, refresh } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, onCleanup, refresh } from "solid-js";
 
 import { listAccounts } from "../api/accounts";
 import type { PricedEvent, UsageEvent } from "../api/usage";
 import { fetchEvents } from "../api/usage";
 import type { StreamStatus } from "../api/usageStream";
 import { createUsageStream } from "../api/usageStream";
-import { Choice } from "../components/Choice";
+import { BUTTON, Select } from "../components/Control";
 import { EventsTable } from "../components/EventsTable";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { accountsNeedingSource, accountText } from "../domain/account";
@@ -15,10 +15,6 @@ import { RANGES, rangeStart } from "../domain/range";
 const PAGE_SIZE = 50;
 const MAX_LIVE_ROWS = 500;
 const CLOCK_INTERVAL_MS = 1000;
-
-const RANGE_OPTIONS = RANGES.map(range => ({ value: range.rangeId, label: range.label }));
-
-const PAGER_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-50 dark:text-slate-300";
 
 const STATUS_PRESENTATION: Record<StreamStatus, { label: string; dot: string; }> = {
   connecting: { label: "Connecting", dot: "bg-slate-400 dark:bg-slate-500" },
@@ -66,13 +62,14 @@ const AccountFilter = (properties: { accountId: string | undefined; onChoose: (a
   return (
     <Errored fallback={<p class="text-xs text-red-600 dark:text-red-400" role="alert">Accounts unavailable</p>}>
       <Loading fallback={<p class="text-xs text-slate-500 dark:text-slate-500" role="status">Loading accounts</p>}>
-        <Choice
+        <label for="logs-account" class="sr-only">Account</label>
+        <Select
           controlId="logs-account"
-          label="Account"
           value={properties.accountId ?? ""}
-          options={options()}
-          onChoose={value => properties.onChoose(value === "" ? undefined : value)}
-        />
+          onChange={value => properties.onChoose(value === "" ? undefined : value)}
+        >
+          <For each={options()}>{option => <option value={option.value}>{option.label}</option>}</For>
+        </Select>
       </Loading>
     </Errored>
   );
@@ -166,17 +163,18 @@ export const LogsPage = () => {
 
   return (
     <div class="space-y-6">
-      <div class="flex flex-wrap items-end justify-between gap-4">
+      <div class="flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-baseline gap-3">
           <h1 class="text-lg font-semibold">Logs</h1>
           <ConnectionIndicator status={status()} />
         </div>
-        <div class="flex flex-wrap items-end gap-4">
-          <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="flex h-8 items-center gap-2 px-1 text-sm text-slate-700 dark:text-slate-300">
             <input
               type="checkbox"
               checked={view().failuresOnly}
               onInput={event => changeView({ failed: event.currentTarget.checked ? "true" : null })}
+              class="size-4 accent-blue-600"
             />
             Failures only
           </label>
@@ -184,13 +182,10 @@ export const LogsPage = () => {
             accountId={view().accountId}
             onChoose={accountId => changeView({ account: accountId ?? null })}
           />
-          <Choice
-            controlId="logs-range"
-            label="Range"
-            value={range().rangeId}
-            options={RANGE_OPTIONS}
-            onChoose={value => changeView({ range: value })}
-          />
+          <label for="logs-range" class="sr-only">Range</label>
+          <Select controlId="logs-range" value={range().rangeId} onChange={value => changeView({ range: value })}>
+            <For each={RANGES}>{option => <option value={option.rangeId}>{option.label}</option>}</For>
+          </Select>
         </div>
       </div>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
@@ -202,7 +197,7 @@ export const LogsPage = () => {
                 type="button"
                 disabled={cursors().length === 0}
                 onClick={() => setCursors(cursors().slice(0, -1))}
-                class={PAGER_BUTTON}
+                class={BUTTON}
               >
                 Newer
               </button>
@@ -214,7 +209,7 @@ export const LogsPage = () => {
 
                   if (cursor !== undefined) setCursors([...cursors(), cursor]);
                 }}
-                class={PAGER_BUTTON}
+                class={BUTTON}
               >
                 Older
               </button>

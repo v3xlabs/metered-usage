@@ -8,10 +8,7 @@ import { createPlan, updatePlan } from "../../api/plans";
 import { accountText } from "../../domain/account";
 import { utcDayOf, utcMidnight } from "../../domain/dateInput";
 import { redact } from "../../domain/privacy";
-
-const FIELD = "w-full rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100";
-const FIELD_LABEL = "block text-xs font-medium text-slate-600 dark:text-slate-400";
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
+import { BUTTON, FIELD, FIELD_LABEL } from "../Control";
 
 /** `plan` is the plan being edited; without one a new plan is added, named `suggestedName` when given. */
 export type PlanEditing = { plan: Plan | undefined; suggestedName: string | undefined; };
@@ -78,7 +75,7 @@ const PlanForm = (properties: {
             type="text"
             required
             value={properties.plan?.name ?? properties.suggestedName ?? ""}
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
         <div class="space-y-1">
@@ -93,7 +90,7 @@ const PlanForm = (properties: {
             min="0"
             step="0.01"
             value={properties.plan?.monthly_usd ?? ""}
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
         <div />
@@ -105,7 +102,7 @@ const PlanForm = (properties: {
             type="date"
             required
             value={properties.plan === undefined ? "" : utcDayOf(properties.plan.period_start)}
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
         <div class="space-y-1">
@@ -115,7 +112,7 @@ const PlanForm = (properties: {
             name="period_end"
             type="date"
             value={properties.plan?.period_end === undefined ? "" : utcDayOf(properties.plan.period_end)}
-            class={FIELD}
+            class={["w-full", FIELD]}
           />
         </div>
       </div>
@@ -127,7 +124,7 @@ const PlanForm = (properties: {
           type="button"
           disabled={isSubmitting()}
           onClick={() => properties.onCancel()}
-          class={CONTROL_BUTTON}
+          class={BUTTON}
         >
           Cancel
         </button>

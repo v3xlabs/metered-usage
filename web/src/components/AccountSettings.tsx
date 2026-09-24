@@ -8,8 +8,7 @@ import { settle } from "../api/client";
 import { accountLabel, accountText } from "../domain/account";
 import { formatExact } from "../domain/format";
 import { redact } from "../domain/privacy";
-
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
+import { BUTTON, DANGER_BUTTON, Select } from "./Control";
 
 export const AccountSettings = (properties: { account: Account; candidates: readonly Account[]; onMerged: () => void; }) => {
   const [isOpen, setIsOpen] = createSignal(false);
@@ -80,23 +79,23 @@ export const AccountSettings = (properties: { account: Account; candidates: read
               fallback={(
                 <div class="space-y-2">
                   <label for={selectId} class="block text-xs font-medium text-slate-600 dark:text-slate-400">Merge into</label>
-                  <select
-                    id={selectId}
+                  <Select
+                    controlId={selectId}
                     value={targetId()}
-                    onChange={event => setTargetId(event.currentTarget.value)}
-                    class="w-full rounded-control bg-raised px-2.5 py-1 text-sm text-slate-900 dark:text-slate-100"
+                    onChange={setTargetId}
+                    class="w-full"
                   >
                     <option value="">Choose an account</option>
                     <For each={properties.candidates}>
                       {candidate => <option value={candidate.account_id}>{accountText(candidate, false)}</option>}
                     </For>
-                  </select>
+                  </Select>
                   <div class="flex justify-end">
                     <button
                       type="button"
                       disabled={target() === undefined}
                       onClick={() => setIsConfirming(true)}
-                      class={CONTROL_BUTTON}
+                      class={BUTTON}
                     >
                       Merge
                     </button>
@@ -114,7 +113,7 @@ export const AccountSettings = (properties: { account: Account; candidates: read
                       type="button"
                       disabled={isMerging()}
                       onClick={() => setIsConfirming(false)}
-                      class={CONTROL_BUTTON}
+                      class={BUTTON}
                     >
                       Back
                     </button>
@@ -122,7 +121,7 @@ export const AccountSettings = (properties: { account: Account; candidates: read
                       type="button"
                       disabled={isMerging()}
                       onClick={() => void merge(into())}
-                      class="rounded-control bg-red-600 px-2.5 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                      class={DANGER_BUTTON}
                     >
                       {isMerging() ? "Merging..." : "Confirm merge"}
                     </button>

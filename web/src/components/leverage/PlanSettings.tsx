@@ -10,9 +10,9 @@ import { accountLabel, accountText } from "../../domain/account";
 import { formatUsd } from "../../domain/format";
 import { isActive, planSpanText } from "../../domain/leverage";
 import { redact } from "../../domain/privacy";
+import { BUTTON, DANGER_BUTTON } from "../Control";
 import type { PlanEditing } from "./PlanDialog";
 
-const CONTROL_BUTTON = "rounded-control bg-raised px-2.5 py-1 text-sm text-slate-700 hover:bg-raised-hover disabled:opacity-60 dark:text-slate-300";
 const ROW_ICON_BUTTON = "flex size-7 shrink-0 items-center justify-center rounded-control text-slate-500 hover:bg-raised dark:text-slate-400";
 
 export const PlanSettings = (properties: {
@@ -135,7 +135,7 @@ export const PlanSettings = (properties: {
                           type="button"
                           disabled={isDeleting()}
                           onClick={() => setDeleting(undefined)}
-                          class={CONTROL_BUTTON}
+                          class={BUTTON}
                         >
                           Back
                         </button>
@@ -143,7 +143,7 @@ export const PlanSettings = (properties: {
                           type="button"
                           disabled={isDeleting()}
                           onClick={() => void remove(plan)}
-                          class="rounded-control bg-red-600 px-2.5 py-1 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                          class={DANGER_BUTTON}
                         >
                           {isDeleting() ? "Deleting..." : "Delete"}
                         </button>
