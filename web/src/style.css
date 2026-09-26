@@ -20,6 +20,10 @@
   color-scheme: light dark;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
 /* The slate ramp carries a blue tint that only suits the light theme, so the dark theme
    regrounds the same steps on a neutral ramp that bottoms out at black. */
 html.dark {
