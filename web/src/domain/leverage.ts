@@ -1,7 +1,7 @@
 import type { Account } from "../api/accounts";
 import type { LeveragePeriod } from "../api/leverage";
 import type { Plan } from "../api/plans";
-import { isRetired } from "./account";
+import { isRetired, planLabel } from "./account";
 import { formatUtcDay } from "./format";
 
 const MS_PER_DAY = 86_400_000;
@@ -78,6 +78,20 @@ export const byStanding = (left: AccountLeverage, right: AccountLeverage): numbe
   standing(left) - standing(right)
   || leverageOf(right) - leverageOf(left)
   || right.account.event_count - left.account.event_count;
+
+// The plan CLIProxy now reports when the running plan does not name it, as after an upgrade
+// or a move to an organization seat. Names are free text, so a name that contains the
+// detected plan, such as "Claude Max" for `max`, counts as the same plan.
+export const reportedPlanChange = (entry: AccountLeverage): string | undefined => {
+  const detected = entry.account.plan;
+  const running = entry.active?.plan.name.toLowerCase();
+
+  if (detected === undefined || running === undefined || isRetired(entry.account)) return undefined;
+
+  const label = planLabel(entry.account.provider, detected);
+
+  return running.includes(detected.toLowerCase()) || running.includes(label.toLowerCase()) ? undefined : label;
+};
 
 export type PlanEndSuggestion = { planId: string; periodEnd: string; };
 

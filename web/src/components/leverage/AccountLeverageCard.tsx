@@ -9,7 +9,7 @@ import type { QuotaCalibration, QuotaWindow } from "../../api/quota";
 import { accountLabel, isRetired, planLabel } from "../../domain/account";
 import { formatLeverage, formatMoment, formatUsd, formatUtcDay } from "../../domain/format";
 import type { AccountLeverage, PlanHistory } from "../../domain/leverage";
-import { hasHistory, isBreakingEven, isEnded, periodProgress, periodText, planSpanText, planTotals, shownHistory, suggestedPlanEnd } from "../../domain/leverage";
+import { hasHistory, isBreakingEven, isEnded, periodProgress, periodText, planSpanText, planTotals, reportedPlanChange, shownHistory, suggestedPlanEnd } from "../../domain/leverage";
 import { redact } from "../../domain/privacy";
 import { AccountName, AuthKindIcon } from "../AccountName";
 import { BUTTON } from "../Control";
@@ -197,6 +197,7 @@ export const AccountLeverageCard = (properties: {
   const [editing, setEditing] = createSignal<PlanEditing | undefined>();
   const retirement = createMemo(() => retirementText(properties.entry.account));
   const suggestion = createMemo(() => suggestedPlanEnd(properties.entry));
+  const changed = createMemo(() => reportedPlanChange(properties.entry));
 
   return (
     <li
@@ -279,6 +280,16 @@ export const AccountLeverageCard = (properties: {
             periodEnd={end().periodEnd}
             onChanged={properties.onChanged}
           />
+        )}
+      </Show>
+      <Show when={changed()}>
+        {label => (
+          <div class="relative z-10 space-y-2 rounded-panel bg-sky-50 p-3 text-xs text-sky-700 dark:bg-sky-950/40 dark:text-sky-400">
+            <p>{`CLIProxy now reports ${label()} for this credential. If the subscription changed, end ${properties.entry.active?.plan.name ?? "the plan"} in the plan settings and track ${label()} from today.`}</p>
+            <button type="button" onClick={() => setEditing({ plan: undefined, suggestedName: label() })} class={BUTTON}>
+              {`Track ${label()}`}
+            </button>
+          </div>
         )}
       </Show>
       <Errored fallback={null}>

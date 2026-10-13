@@ -7,7 +7,7 @@ import { fetchQuota } from "../api/quota";
 import { AccountLeverageCard } from "../components/leverage/AccountLeverageCard";
 import { LeverageHistory } from "../components/leverage/LeverageHistory";
 import { RegionFailure, RegionPending } from "../components/Region";
-import { accountsNeedingSource } from "../domain/account";
+import { accountsNeedingSource, isRetired } from "../domain/account";
 import type { AccountLeverage } from "../domain/leverage";
 import { byStanding, hasHistory, isActive } from "../domain/leverage";
 
@@ -49,11 +49,27 @@ export const PlanLeveragePage = () => {
   const selected = createMemo(() =>
     entries().find(entry => entry.account.account_id === selectedAccountId() && hasHistory(entry))
     ?? entries().find(entry => hasHistory(entry)));
+  // A retired credential that never had a plan has no leverage to show, but a plan can still
+  // be added to it after the fact, so it is folded away rather than dropped.
+  const folded = createMemo(() => entries().filter(entry => isRetired(entry.account) && entry.histories.length === 0));
+  const shown = createMemo(() => entries().filter(entry => !folded().includes(entry)));
 
   const reload = (): void => {
     refresh(plans);
     refresh(leverage);
   };
+
+  const card = (entry: AccountLeverage) => (
+    <AccountLeverageCard
+      entry={entry}
+      isSourceShown={needingSource().has(entry.account.account_id)}
+      isSelected={selected()?.account.account_id === entry.account.account_id}
+      nowMs={nowMs}
+      windows={windowsByAccount().get(entry.account.account_id)}
+      onSelect={() => setSelectedAccountId(entry.account.account_id)}
+      onChanged={reload}
+    />
+  );
 
   return (
     <div class="space-y-8">
@@ -67,20 +83,18 @@ export const PlanLeveragePage = () => {
             <section class="space-y-3" aria-labelledby="leverage-plans">
               <h2 id="leverage-plans" class="text-sm font-semibold">Plans</h2>
               <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <For each={entries()}>
-                  {entry => (
-                    <AccountLeverageCard
-                      entry={entry}
-                      isSourceShown={needingSource().has(entry.account.account_id)}
-                      isSelected={selected()?.account.account_id === entry.account.account_id}
-                      nowMs={nowMs}
-                      windows={windowsByAccount().get(entry.account.account_id)}
-                      onSelect={() => setSelectedAccountId(entry.account.account_id)}
-                      onChanged={reload}
-                    />
-                  )}
-                </For>
+                <For each={shown()}>{entry => card(entry)}</For>
               </ul>
+              <Show when={folded().length > 0}>
+                <details>
+                  <summary class="cursor-pointer py-1 text-xs text-slate-500 select-none hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                    {`${folded().length} ${folded().length === 1 ? "credential" : "credentials"} no longer in CLIProxy, without a plan`}
+                  </summary>
+                  <ul class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <For each={folded()}>{entry => card(entry)}</For>
+                  </ul>
+                </details>
+              </Show>
             </section>
             <Show when={selected()}>
               {entry => (

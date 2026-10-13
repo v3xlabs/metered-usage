@@ -14,6 +14,9 @@ const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const FIVE_HOURS: i64 = 5 * 60 * 60;
 const WEEK: i64 = 7 * 24 * 60 * 60;
 const FABLE_KEY: &str = "iguana_necktie";
+/// Personal subscriptions also name an organization type, but only the account flags say
+/// which of them a token holds.
+const PERSONAL_ORGANIZATIONS: [&str; 3] = ["max", "pro", "free"];
 
 /// Payload key, window key and label. Claude names its windows and never states their
 /// length, so the length follows from the key: `five_hour` is five hours, every other one
@@ -168,6 +171,8 @@ fn scope(key: &str) -> Scope {
     }
 }
 
+/// An active organization plan, `claude_team` or `claude_enterprise`, wins over the account
+/// flags: they describe the person's own subscription, and read as free for a seat.
 fn plan(profile: &Value) -> Option<String> {
     let organization = |key: &str| {
         profile
@@ -175,10 +180,13 @@ fn plan(profile: &Value) -> Option<String> {
             .and_then(text)
             .map(|value| value.to_lowercase())
     };
-    if organization("organization_type").as_deref() == Some("claude_team")
-        && organization("subscription_status").as_deref() == Some("active")
+    if organization("subscription_status").as_deref() == Some("active")
+        && let Some(kind) = organization("organization_type")
+            .as_deref()
+            .and_then(|kind| kind.strip_prefix("claude_"))
+            .filter(|kind| !kind.is_empty() && !PERSONAL_ORGANIZATIONS.contains(kind))
     {
-        return Some("team".to_owned());
+        return Some(kind.to_owned());
     }
     let flag = |key: &str| profile.pointer(&format!("/account/{key}")).and_then(truthy);
     let (max, pro) = (flag("has_claude_max"), flag("has_claude_pro"));
@@ -205,6 +213,21 @@ mod tests {
         });
 
         assert_eq!(plan(&profile).as_deref(), Some("team"));
+    }
+
+    #[test]
+    fn an_enterprise_seat_is_enterprise_and_a_personal_max_is_max() {
+        let seat = json!({
+            "organization": { "organization_type": "claude_enterprise", "subscription_status": "active" },
+            "account": { "has_claude_max": false, "has_claude_pro": false },
+        });
+        let personal = json!({
+            "organization": { "organization_type": "claude_max", "subscription_status": "active" },
+            "account": { "has_claude_max": true, "has_claude_pro": false },
+        });
+
+        assert_eq!(plan(&seat).as_deref(), Some("enterprise"));
+        assert_eq!(plan(&personal).as_deref(), Some("max"));
     }
 
     #[test]
