@@ -14,6 +14,9 @@ use crate::usage::{PricedEvent, UsageUpdate};
 ///
 /// The provider condition applies to manual rows only: gateways and LiteLLM name
 /// providers differently (`claude` against `anthropic`), and a map key names one model.
+/// LiteLLM keys some models only under their provider (`meta/muse-wonder-1.0`), so such a
+/// key also prices the bare name when the gateway names that same provider. A bare key
+/// still wins, because the exact name ranks first.
 const FILL: &str = "WITH ranked AS ( \
      SELECT event.event_id, price.price_id, ROW_NUMBER() OVER ( \
          PARTITION BY event.event_id \
@@ -26,7 +29,9 @@ const FILL: &str = "WITH ranked AS ( \
              price.price_id DESC) AS preference \
      FROM usage_event AS event \
      JOIN model_price AS price \
-         ON (price.model = event.model OR price.model = event.model_alias) \
+         ON (price.model = event.model OR price.model = event.model_alias \
+             OR (price.provider = event.provider \
+                 AND price.model = price.provider || '/' || event.model)) \
          AND (price.origin <> 'manual' OR price.provider IS NULL \
              OR price.provider = event.provider) \
          AND (price.service_tier IS NULL OR price.service_tier = event.service_tier) \

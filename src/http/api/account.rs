@@ -127,6 +127,13 @@ struct AccountOutput {
     /// As the gateway last described the credential.
     account_type: Option<String>,
     plan: Option<String>,
+    /// CLIProxy's status for the credential, such as `active` or `error`.
+    status: Option<String>,
+    /// Turned off in CLIProxy.
+    disabled: bool,
+    /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
+    /// no longer lists it.
+    removed_at: Option<String>,
     first_seen_at: String,
     last_seen_at: String,
     event_count: i64,
@@ -146,6 +153,9 @@ impl From<Account> for AccountOutput {
             merged_into_account_id: account.merged_into_account_id.map(Id::encode),
             account_type: account.account_type,
             plan: account.plan,
+            status: account.status,
+            disabled: account.disabled,
+            removed_at: account.removed_at.map(|at| at.0.to_string()),
             first_seen_at: account.first_seen_at.to_string(),
             last_seen_at: account.last_seen_at.to_string(),
             event_count: account.event_count,

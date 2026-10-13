@@ -318,6 +318,59 @@ async fn soft_sync_registers_every_credential_without_reaching_a_provider() {
 }
 
 #[tokio::test]
+async fn a_credential_the_list_leaves_out_is_marked_removed() {
+    let calls = Calls::default();
+    let (client, state) = service(&calls).await.expect("a service");
+    let sync = || client.post("/api/quota/sync").body_json(&json!({})).send();
+    sync().await.assert_status_is_ok();
+    sqlx::query(
+        "INSERT INTO account (account_id, source_id, provider, upstream_key, auth_kind, label, \
+         first_seen_at, last_seen_at) SELECT 99, source_id, 'claude', 'replaced', 'oauth', \
+         'ada@example.com', ?1, ?1 FROM account WHERE upstream_key = 'a1'",
+    )
+    .bind("2026-09-22T10:00:00.000000000Z")
+    .execute(&state.database.pool)
+    .await
+    .expect("an account");
+    sqlx::query(
+        "INSERT INTO credential_state (account_id, status, soft_observed_at) \
+         VALUES (99, 'error', '2026-09-22T10:00:00.000000000Z')",
+    )
+    .execute(&state.database.pool)
+    .await
+    .expect("its last state");
+
+    let synced = sync().await.json().await.value().deserialize::<Value>();
+
+    let removed = synced["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|account| !account["removed_at"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(removed.len(), 1, "removed {removed:?}");
+    assert_eq!(removed[0]["removed_at"], "2026-09-23T10:00:00Z");
+    assert_eq!(removed[0]["status"], "error");
+    let accounts = client
+        .get("/api/accounts")
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize::<Value>();
+    let replaced = accounts["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|account| account["removed_at"].is_string());
+    assert_eq!(
+        replaced.map(|account| &account["status"]),
+        Some(&json!("error"))
+    );
+}
+
+#[tokio::test]
 async fn hard_refresh_stores_used_fractions_and_isolates_a_failing_credential() {
     let calls = Calls::default();
     let (client, _state) = service(&calls).await.expect("a service");

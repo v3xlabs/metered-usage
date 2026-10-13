@@ -221,8 +221,9 @@ async fn sources(
     Ok(sources)
 }
 
-/// Registers every listed credential and writes what the list says about it, answering
-/// each credential's account with the provider that can hard refresh it, if any.
+/// Registers every listed credential, writes what the list says about it and marks every
+/// credential it no longer names, answering each listed credential's account with the
+/// provider that can hard refresh it, if any.
 async fn store<'a>(
     state: &AppState,
     source_id: Id<Source>,
@@ -276,6 +277,7 @@ async fn store<'a>(
         .await?;
         stored.push((account_id, file, provider));
     }
+    QuotaAccount::mark_unlisted(&mut transaction, source_id, listing.observed_at).await?;
     transaction.commit().await?;
 
     Ok(stored)

@@ -483,6 +483,36 @@ async fn a_gateway_provider_name_does_not_hide_a_synced_price() -> Result<(), Fa
 }
 
 #[tokio::test]
+async fn a_key_litellm_names_only_under_its_provider_prices_the_bare_model() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.maps.public.lock().await["meta/muse-wonder-1.0"] = json!({
+        "litellm_provider": "meta",
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 8e-06,
+    });
+    harness.sync().await?;
+    let muse = |upstream_id: &str, provider: &str| {
+        let mut event = request(upstream_id, at("2025-06-01T00:00:00Z")?, 1000, 1000);
+        provider.clone_into(&mut event.provider);
+        "muse-wonder-1.0".clone_into(&mut event.model);
+        Ok::<_, Failure>(event)
+    };
+    harness
+        .store("proxy", vec![muse("meta", "meta")?, muse("other", "kimi")?])
+        .await?;
+    harness.fill().await?;
+
+    close(harness.cost("meta").await?.list_cost_usd, 0.01);
+    assert_eq!(
+        harness.cost("other").await?.price_id,
+        None,
+        "another provider's request is not priced from the meta key"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_long_context_price_starts_above_its_threshold() -> Result<(), Failure> {
     let harness = harness().await?;
     harness.sync().await?;

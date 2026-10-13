@@ -1,4 +1,4 @@
-import type { QuotaWindow } from "../api/quota";
+import type { QuotaAccount, QuotaWindow } from "../api/quota";
 import { formatExact } from "./format";
 
 const SECONDS_PER_MINUTE = 60;
@@ -53,6 +53,11 @@ export const latestMoment = (timestamps: readonly (string | undefined)[]): strin
 // show a single panel-level age.
 export const isBehind = (timestamp: string | undefined, latest: string | undefined): boolean =>
   latest !== undefined && (timestamp === undefined || Date.parse(latest) - Date.parse(timestamp) > BEHIND_TOLERANCE_MS);
+
+const lastUseMs = (entry: QuotaAccount): number => (entry.last_used_at === undefined ? 0 : Date.parse(entry.last_used_at));
+
+// The credential in use comes first; those never used keep the server's order at the end.
+export const byLastUse = (left: QuotaAccount, right: QuotaAccount): number => lastUseMs(right) - lastUseMs(left);
 
 export type QuotaLevel = "comfortable" | "low" | "exhausted";
 

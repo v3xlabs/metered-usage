@@ -23,6 +23,26 @@ export const accountText = (account: AccountSummary, isSourceShown: boolean): st
 export const accountDescription = (account: AccountSummary): string =>
   `${accountLabel(account)}, ${providerLabel(account.provider)} on ${redact(account.source_name)}, ${AUTH_KIND_LABELS[account.auth_kind]}`;
 
+// The names CLIProxy's management UI shows for the plan types in a Codex ID token.
+const CODEX_PLAN_LABELS: Readonly<Record<string, string>> = {
+  "free": "Free",
+  "plus": "Plus",
+  "team": "Team",
+  "pro": "Pro 200",
+  "prolite": "Pro 100",
+  "pro_lite": "Pro 100",
+  "pro-lite": "Pro 100",
+  "self_serve_business_prolite": "Business Premium",
+};
+
+export const planLabel = (provider: string, plan: string): string =>
+  (provider === "codex" ? CODEX_PLAN_LABELS[plan] : undefined) ?? plan;
+
+// A credential CLIProxy deleted, replaced with a new sign-in, or turned off. Its events and
+// plans stay, but it carries no more traffic.
+export const isRetired = (credential: { disabled: boolean; removed_at?: string; }): boolean =>
+  credential.disabled || credential.removed_at !== undefined;
+
 // Compares the stored names, as a redacted label would make every account read alike.
 const nameOf = (account: AccountSummary): string =>
   `${account.provider}\n${account.display_name ?? account.label ?? ""}`;

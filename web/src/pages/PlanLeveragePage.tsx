@@ -7,18 +7,9 @@ import { fetchQuota } from "../api/quota";
 import { AccountLeverageCard } from "../components/leverage/AccountLeverageCard";
 import { LeverageHistory } from "../components/leverage/LeverageHistory";
 import { RegionFailure, RegionPending } from "../components/Region";
-import { accountsNeedingSource, groupBySource } from "../domain/account";
+import { accountsNeedingSource } from "../domain/account";
 import type { AccountLeverage } from "../domain/leverage";
-import { hasHistory, isActive } from "../domain/leverage";
-
-// Priced plans lead, then plans CLIProxy detected but nobody priced, then the rest.
-const standing = (entry: AccountLeverage): number => {
-  if (entry.active !== undefined) return 0;
-
-  if (entry.account.plan !== undefined) return 1;
-
-  return entry.histories.length > 0 ? 2 : 3;
-};
+import { byStanding, hasHistory, isActive } from "../domain/leverage";
 
 export const PlanLeveragePage = () => {
   const accounts = createMemo(() => listAccounts());
@@ -36,14 +27,9 @@ export const PlanLeveragePage = () => {
   const [selectedAccountId, setSelectedAccountId] = createSignal<string | undefined>();
 
   const periodsByPlan = createMemo(() => new Map(leverage().map(entry => [entry.plan.plan_id, entry.periods])));
-  const planned = createMemo(() => new Set(plans().map(plan => plan.account.account_id)));
 
-  const entries = createMemo((): readonly AccountLeverage[] => {
-    // A merged account has no events of its own, so it is listed only while a plan still points at it.
-    const listed = accounts().filter(account => account.merged_into_account_id === undefined || planned().has(account.account_id));
-
-    return groupBySource(listed, account => account)
-      .flatMap(group => group.entries)
+  const entries = createMemo((): readonly AccountLeverage[] =>
+    accounts()
       .map((account) => {
         const histories = plans()
           .filter(plan => plan.account.account_id === account.account_id)
@@ -52,8 +38,7 @@ export const PlanLeveragePage = () => {
 
         return { account, histories, active: histories.find(history => isActive(history.plan, nowMs)) };
       })
-      .toSorted((left, right) => standing(left) - standing(right));
-  });
+      .toSorted(byStanding));
 
   const needingSource = createMemo(() => accountsNeedingSource(entries().map(entry => entry.account)));
   const scaleMax = createMemo(() => {

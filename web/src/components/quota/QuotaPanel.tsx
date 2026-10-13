@@ -1,16 +1,11 @@
-import { useSearchParams } from "@solidjs/router";
 import { TbOutlineCloudDownload, TbOutlineRefresh } from "solid-icons/tb";
-import type { Accessor } from "solid-js";
 import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanup, Show } from "solid-js";
 
-import type { AccountHealthStrip } from "../../api/accountHealth";
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
-import { groupBySource } from "../../domain/account";
+import { groupBySource, isRetired } from "../../domain/account";
 import { redact } from "../../domain/privacy";
-import { formatAge, latestMoment } from "../../domain/quota";
-import type { SegmentOption } from "../analytics/Segmented";
-import { Segmented } from "../analytics/Segmented";
+import { byLastUse, formatAge, latestMoment } from "../../domain/quota";
 import { createAccountHealth } from "../HealthStrip";
 import { IconButton } from "../IconButton";
 import { RegionFailure, RegionPending } from "../Region";
@@ -30,69 +25,6 @@ type Notice = { tone: "info" | "error"; text: string; };
 
 type Latest = { soft: string | undefined; hard: string | undefined; };
 
-type PanelMode = "quota" | "live";
-
-const PANEL_MODES: readonly SegmentOption<PanelMode>[] = [
-  { value: "quota", label: "Quota" },
-  { value: "live", label: "Live" },
-];
-
-type GroupsProperties = {
-  accounts: readonly QuotaAccount[];
-  nowMs: number;
-  latest: Latest;
-  isRefreshBlocked: boolean;
-  onAccounts: (accounts: readonly QuotaAccount[]) => void;
-};
-
-const QuotaGroups = (properties: GroupsProperties & { health: Accessor<AccountHealthStrip> | undefined; }) => (
-  <Show
-    when={properties.accounts.length > 0}
-    fallback={<p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">No CLIProxy account has reported quota yet.</p>}
-  >
-    <div class="space-y-4">
-      <For each={groupBySource(properties.accounts, entry => entry.account)}>
-        {group => (
-          <section class="space-y-2" aria-label={`Quota for ${redact(group.sourceName)}`}>
-            <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group.sourceName)}</h3>
-            <ul class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <For each={group.entries}>
-                {entry => (
-                  <QuotaCard
-                    entry={entry}
-                    nowMs={properties.nowMs}
-                    latestSoft={properties.latest.soft}
-                    latestHard={properties.latest.hard}
-                    isRefreshBlocked={properties.isRefreshBlocked}
-                    onAccounts={properties.onAccounts}
-                    health={properties.health}
-                  />
-                )}
-              </For>
-            </ul>
-          </section>
-        )}
-      </For>
-    </div>
-  </Show>
-);
-
-// Mounted only while Live is shown, so the health refetch stops with it.
-const LiveGroups = (properties: GroupsProperties) => {
-  const health = createAccountHealth();
-
-  return (
-    <QuotaGroups
-      accounts={properties.accounts}
-      nowMs={properties.nowMs}
-      latest={properties.latest}
-      isRefreshBlocked={properties.isRefreshBlocked}
-      onAccounts={properties.onAccounts}
-      health={health}
-    />
-  );
-};
-
 export const QuotaPanel = () => {
   const [accounts, setAccounts] = createSignal<readonly QuotaAccount[]>(async () => {
     const result = await fetchQuota();
@@ -106,18 +38,20 @@ export const QuotaPanel = () => {
   const [isSyncing, setIsSyncing] = createSignal(false);
   const [isRefreshingAll, setIsRefreshingAll] = createSignal(false);
   const [notice, setNotice] = createSignal<Notice | undefined>();
-  const [searchParameters, setSearchParameters] = useSearchParams<{ panel: string; }>();
-  const mode = createMemo((): PanelMode => (searchParameters.panel === "live" ? "live" : "quota"));
+  const health = createAccountHealth();
 
-  const hasRefreshable = createMemo(() => accounts().some(entry => entry.hard_refreshable));
+  // A retired credential keeps its history for the other pages but has no quota left to watch.
+  const current = createMemo(() => accounts().filter(entry => !isRetired(entry))
+    .toSorted(byLastUse));
+  const hasRefreshable = createMemo(() => current().some(entry => entry.hard_refreshable));
   const latest = createMemo((): Latest => ({
-    soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
-    hard: latestMoment(accounts().map(entry => entry.hard_refreshed_at)),
+    soft: latestMoment(current().map(entry => entry.soft_observed_at)),
+    hard: latestMoment(current().map(entry => entry.hard_refreshed_at)),
   }));
   // The next moment a window resets, as reported or as predicted after an earlier reset.
   const nextResetMs = createMemo(() => {
     const nowMs = Date.now();
-    const resets = accounts()
+    const resets = current()
       .flatMap(entry => entry.windows)
       .flatMap((window) => {
         const resetsAt = window.prediction?.has_reset === true ? window.prediction.resets_at : window.resets_at;
@@ -202,15 +136,7 @@ export const QuotaPanel = () => {
   return (
     <section class="space-y-3" aria-labelledby="quota-heading">
       <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-        <div class="flex items-center gap-3">
-          <h2 id="quota-heading" class="py-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Quota</h2>
-          <Segmented
-            label="Quota panel view"
-            value={mode()}
-            options={PANEL_MODES}
-            onChoose={value => setSearchParameters({ panel: value })}
-          />
-        </div>
+        <h2 id="quota-heading" class="py-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Quota</h2>
         <Errored fallback={null}>
           <Loading fallback={null}>
             <div class="flex flex-col items-end gap-0.5">
@@ -260,25 +186,33 @@ export const QuotaPanel = () => {
             )}
           </Show>
           <Show
-            when={mode() === "live"}
-            fallback={(
-              <QuotaGroups
-                accounts={accounts()}
-                nowMs={nowMs()}
-                latest={latest()}
-                isRefreshBlocked={isRefreshingAll()}
-                onAccounts={setAccounts}
-                health={undefined}
-              />
-            )}
+            when={current().length > 0}
+            fallback={<p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">No CLIProxy account has reported quota yet.</p>}
           >
-            <LiveGroups
-              accounts={accounts()}
-              nowMs={nowMs()}
-              latest={latest()}
-              isRefreshBlocked={isRefreshingAll()}
-              onAccounts={setAccounts}
-            />
+            <div class="space-y-4">
+              <For each={groupBySource(current(), entry => entry.account)}>
+                {group => (
+                  <section class="space-y-2" aria-label={`Quota for ${redact(group.sourceName)}`}>
+                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group.sourceName)}</h3>
+                    <ul class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      <For each={group.entries}>
+                        {entry => (
+                          <QuotaCard
+                            entry={entry}
+                            nowMs={nowMs()}
+                            latestSoft={latest().soft}
+                            latestHard={latest().hard}
+                            isRefreshBlocked={isRefreshingAll()}
+                            onAccounts={setAccounts}
+                            health={health}
+                          />
+                        )}
+                      </For>
+                    </ul>
+                  </section>
+                )}
+              </For>
+            </div>
           </Show>
         </Loading>
       </Errored>

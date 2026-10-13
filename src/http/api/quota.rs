@@ -287,6 +287,11 @@ pub struct QuotaAccountOutput {
     hard_refresh_error: Option<String>,
     /// Whether the provider has an adapter and the credential carries what it needs.
     hard_refreshable: bool,
+    /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
+    /// no longer lists it.
+    removed_at: Option<String>,
+    /// When the last request charged to the credential happened.
+    last_used_at: Option<String>,
     windows: Vec<QuotaWindowOutput>,
 }
 
@@ -306,6 +311,8 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             hard_refreshed_at: account.hard_refreshed_at.map(|at| at.0.to_string()),
             hard_refresh_error: account.hard_refresh_error,
             hard_refreshable: account.hard_refreshable,
+            removed_at: account.removed_at.map(|at| at.0.to_string()),
+            last_used_at: account.last_used_at.map(|at| at.0.to_string()),
             windows: account.windows.into_iter().map(Into::into).collect(),
         }
     }

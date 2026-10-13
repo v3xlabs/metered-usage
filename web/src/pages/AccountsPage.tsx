@@ -16,7 +16,7 @@ import { DeadLetterList } from "../components/DeadLetterList";
 import { createAccountHealth, HealthStrip } from "../components/HealthStrip";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { SourceList } from "../components/SourceList";
-import { accountLabel, groupBySource } from "../domain/account";
+import { accountLabel, groupBySource, isRetired, planLabel } from "../domain/account";
 import { formatExact, formatMoment } from "../domain/format";
 import { isPrivate, redact } from "../domain/privacy";
 
@@ -209,9 +209,15 @@ const AccountRow = (properties: {
           {plan => (
             <div class="flex gap-1">
               <dt class="text-slate-500 dark:text-slate-500">Plan</dt>
-              <dd class="text-slate-700 dark:text-slate-300">{plan()}</dd>
+              <dd class="text-slate-700 dark:text-slate-300">{planLabel(properties.account.provider, plan())}</dd>
             </div>
           )}
+        </Show>
+        <Show when={isRetired(properties.account)}>
+          <div class="flex gap-1">
+            <dt class="text-slate-500 dark:text-slate-500">CLIProxy</dt>
+            <dd class="text-amber-700 dark:text-amber-400">{properties.account.removed_at === undefined ? "Disabled" : "No longer listed"}</dd>
+          </div>
         </Show>
       </dl>
     </div>

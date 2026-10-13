@@ -538,6 +538,15 @@ export interface components {
             /** @description As the gateway last described the credential. */
             account_type?: string;
             plan?: string;
+            /** @description CLIProxy's status for the credential, such as `active` or `error`. */
+            status?: string;
+            /** @description Turned off in CLIProxy. */
+            disabled: boolean;
+            /**
+             * @description When CLIProxy's credential list first left the credential out. Present while CLIProxy
+             *     no longer lists it.
+             */
+            removed_at?: string;
             first_seen_at: string;
             last_seen_at: string;
             /** Format: int64 */
@@ -872,6 +881,13 @@ export interface components {
             hard_refresh_error?: string;
             /** @description Whether the provider has an adapter and the credential carries what it needs. */
             hard_refreshable: boolean;
+            /**
+             * @description When CLIProxy's credential list first left the credential out. Present while CLIProxy
+             *     no longer lists it.
+             */
+            removed_at?: string;
+            /** @description When the last request charged to the credential happened. */
+            last_used_at?: string;
             windows: components["schemas"]["QuotaWindow"][];
         };
         /** QuotaCalibration */

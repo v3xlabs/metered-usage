@@ -5,7 +5,7 @@ import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import type { AccountHealthStrip } from "../../api/accountHealth";
 import type { QuotaAccount, QuotaPrediction, QuotaWindow } from "../../api/quota";
 import { refreshQuota } from "../../api/quota";
-import { accountDescription, accountLabel, isUnlabelled } from "../../domain/account";
+import { accountDescription, accountLabel, isUnlabelled, planLabel } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
 import { redact } from "../../domain/privacy";
 import type { QuotaLevel } from "../../domain/quota";
@@ -196,7 +196,7 @@ export const QuotaCard = (properties: {
   latestHard: string | undefined;
   isRefreshBlocked: boolean;
   onAccounts: (accounts: readonly QuotaAccount[]) => void;
-  health: Accessor<AccountHealthStrip> | undefined;
+  health: Accessor<AccountHealthStrip>;
 }) => {
   const [isRefreshing, setIsRefreshing] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
@@ -261,7 +261,7 @@ export const QuotaCard = (properties: {
                   <TbOutlineCreditCard size={14} aria-hidden="true" />
                 </span>
                 <span class="sr-only">Plan</span>
-                <span class="truncate font-semibold">{plan()}</span>
+                <span class="truncate font-semibold">{planLabel(properties.entry.account.provider, plan())}</span>
               </span>
             )}
           </Show>
@@ -280,68 +280,65 @@ export const QuotaCard = (properties: {
         {message => <p class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">{message()}</p>}
       </Show>
       <Show
-        when={properties.health}
-        fallback={(
-          <>
-            <Show
-              when={properties.entry.windows.length > 0}
-              fallback={<p class="text-xs text-slate-500 dark:text-slate-500">No quota windows reported.</p>}
-            >
-              <ul class="space-y-2.5">
-                <For each={properties.entry.windows}>
-                  {window => <WindowRow window={window} nowMs={properties.nowMs} />}
-                </For>
-              </ul>
-            </Show>
-            <Show when={properties.entry.cooldowns.length > 0}>
-              <ul class="space-y-1 text-xs">
-                <For each={properties.entry.cooldowns}>
-                  {cooldown => (
-                    <li class="flex flex-wrap justify-between gap-x-2 text-amber-800 dark:text-amber-300">
-                      <span>
-                        {`Cooldown: ${cooldown.reason}`}
-                        <span class="text-slate-500 dark:text-slate-500">
-                          {cooldown.model_key === undefined ? ` (${cooldown.scope})` : ` (${cooldown.scope}, ${cooldown.model_key})`}
-                        </span>
-                      </span>
-                      <span class="tabular-nums" title={formatMoment(cooldown.retry_at)}>
-                        {`Ends ${formatCountdown(cooldown.retry_at, properties.nowMs)}`}
-                      </span>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-            <Show when={properties.entry.next_retry_after}>
-              {retryAfter => (
-                <p class="text-xs text-slate-600 tabular-nums dark:text-slate-400">
-                  {`CLIProxy retries at ${formatMoment(retryAfter())} (${formatCountdown(retryAfter(), properties.nowMs)})`}
-                </p>
-              )}
-            </Show>
-            <Show when={isSoftBehind() || isHardBehind()}>
-              <dl class="mt-auto grid grid-cols-[auto_1fr] gap-x-2 text-xs text-amber-700 tabular-nums dark:text-amber-400">
-                <Show when={isSoftBehind()}>
-                  <dt>Soft data</dt>
-                  <dd>{formatAge(properties.entry.soft_observed_at, properties.nowMs)}</dd>
-                </Show>
-                <Show when={isHardBehind()}>
-                  <dt>Hard refresh</dt>
-                  <dd>{formatAge(properties.entry.hard_refreshed_at, properties.nowMs)}</dd>
-                </Show>
-              </dl>
-            </Show>
-            <Show when={properties.entry.hard_refresh_error}>
-              {error => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}
-            </Show>
-          </>
-        )}
+        when={properties.entry.windows.length > 0}
+        fallback={<p class="text-xs text-slate-500 dark:text-slate-500">No quota windows reported.</p>}
       >
-        {health => <HealthStrip accountId={properties.entry.account.account_id} strip={health()} />}
+        <ul class="space-y-2.5">
+          <For each={properties.entry.windows}>
+            {window => <WindowRow window={window} nowMs={properties.nowMs} />}
+          </For>
+        </ul>
+      </Show>
+      <Show when={properties.entry.cooldowns.length > 0}>
+        <ul class="space-y-1 text-xs">
+          <For each={properties.entry.cooldowns}>
+            {cooldown => (
+              <li class="flex flex-wrap justify-between gap-x-2 text-amber-800 dark:text-amber-300">
+                <span>
+                  {`Cooldown: ${cooldown.reason}`}
+                  <span class="text-slate-500 dark:text-slate-500">
+                    {cooldown.model_key === undefined ? ` (${cooldown.scope})` : ` (${cooldown.scope}, ${cooldown.model_key})`}
+                  </span>
+                </span>
+                <span class="tabular-nums" title={formatMoment(cooldown.retry_at)}>
+                  {`Ends ${formatCountdown(cooldown.retry_at, properties.nowMs)}`}
+                </span>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+      <Show when={properties.entry.next_retry_after}>
+        {retryAfter => (
+          <p class="text-xs text-slate-600 tabular-nums dark:text-slate-400">
+            {`CLIProxy retries at ${formatMoment(retryAfter())} (${formatCountdown(retryAfter(), properties.nowMs)})`}
+          </p>
+        )}
+      </Show>
+      <Show when={isSoftBehind() || isHardBehind()}>
+        <dl class="grid grid-cols-[auto_1fr] gap-x-2 text-xs text-amber-700 tabular-nums dark:text-amber-400">
+          <Show when={isSoftBehind()}>
+            <dt>Soft data</dt>
+            <dd>{formatAge(properties.entry.soft_observed_at, properties.nowMs)}</dd>
+          </Show>
+          <Show when={isHardBehind()}>
+            <dt>Hard refresh</dt>
+            <dd>{formatAge(properties.entry.hard_refreshed_at, properties.nowMs)}</dd>
+          </Show>
+        </dl>
+      </Show>
+      <Show when={properties.entry.hard_refresh_error}>
+        {error => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}
       </Show>
       <Show when={failure()}>
         {message => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
       </Show>
+      <div class="mt-auto flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-hairline pt-2.5">
+        <HealthStrip accountId={properties.entry.account.account_id} strip={properties.health} />
+        <span class="text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400" title={properties.entry.last_used_at === undefined ? undefined : formatMoment(properties.entry.last_used_at)}>
+          {properties.entry.last_used_at === undefined ? "Never used" : `Used ${formatAge(properties.entry.last_used_at, properties.nowMs)}`}
+        </span>
+      </div>
     </li>
   );
 };

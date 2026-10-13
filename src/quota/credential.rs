@@ -20,7 +20,9 @@ const SELECT: &str = "SELECT account.account_id, account.source_id, source.name 
      credential_state.unavailable, credential_state.next_retry_after, credential_state.cooldowns, \
      credential_state.account_type, credential_state.plan, credential_state.soft_observed_at, \
      credential_state.hard_refreshed_at, credential_state.hard_refresh_error, \
-     credential_state.hard_refreshable \
+     credential_state.hard_refreshable, credential_state.removed_at, \
+     (SELECT MAX(occurred_at) FROM usage_event \
+         WHERE usage_event.account_id = account.account_id) AS last_used_at \
      FROM credential_state \
      JOIN account ON account.account_id = credential_state.account_id \
      JOIN source ON source.source_id = account.source_id \
@@ -47,6 +49,11 @@ pub struct QuotaAccount {
     pub hard_refreshed_at: Option<StoredTimestamp>,
     pub hard_refresh_error: Option<String>,
     pub hard_refreshable: bool,
+    /// When CLIProxy's credential list first left the credential out, as it does once the
+    /// credential is deleted or replaced by a new sign-in.
+    pub removed_at: Option<StoredTimestamp>,
+    /// When the last request charged to the credential happened.
+    pub last_used_at: Option<StoredTimestamp>,
     #[sqlx(skip)]
     pub windows: Vec<QuotaWindow>,
 }
@@ -115,7 +122,8 @@ impl QuotaAccount {
              account_type = excluded.account_type, \
              plan = COALESCE(excluded.plan, credential_state.plan), \
              soft_observed_at = excluded.soft_observed_at, \
-             hard_refreshable = excluded.hard_refreshable",
+             hard_refreshable = excluded.hard_refreshable, \
+             removed_at = NULL",
         )
         .bind(account_id)
         .bind(entry.status.as_deref().filter(|status| !status.is_empty()))
@@ -138,6 +146,28 @@ impl QuotaAccount {
         .bind(plan)
         .bind(StoredTimestamp::from(observed_at))
         .bind(hard_refreshable)
+        .execute(connection)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Marks every credential of the source that the list observed at `observed_at` did
+    /// not name, which [`Self::observe`] has not stamped with that instant. An earlier mark
+    /// is kept.
+    pub async fn mark_unlisted(
+        connection: &mut SqliteConnection,
+        source_id: Id<Source>,
+        observed_at: Timestamp,
+    ) -> Result<(), DatabaseError> {
+        let observed_at = StoredTimestamp::from(observed_at);
+        sqlx::query(
+            "UPDATE credential_state SET removed_at = ?1 \
+             WHERE removed_at IS NULL AND soft_observed_at IS NOT ?1 \
+             AND account_id IN (SELECT account_id FROM account WHERE source_id = ?2)",
+        )
+        .bind(observed_at)
+        .bind(source_id)
         .execute(connection)
         .await?;
 

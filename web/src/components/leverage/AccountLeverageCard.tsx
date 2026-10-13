@@ -1,13 +1,18 @@
 import { TbOutlineCreditCard } from "solid-icons/tb";
 import { createMemo, createSignal, Errored, For, Loading, Match, Show, Switch } from "solid-js";
 
+import type { Account } from "../../api/accounts";
+import { settle } from "../../api/client";
 import type { LeveragePeriod } from "../../api/leverage";
+import { updatePlan } from "../../api/plans";
 import type { QuotaCalibration, QuotaWindow } from "../../api/quota";
-import { accountLabel } from "../../domain/account";
+import { accountLabel, isRetired, planLabel } from "../../domain/account";
 import { formatLeverage, formatMoment, formatUsd, formatUtcDay } from "../../domain/format";
 import type { AccountLeverage, PlanHistory } from "../../domain/leverage";
-import { hasHistory, isBreakingEven, periodProgress, periodText, planTotals } from "../../domain/leverage";
+import { hasHistory, isBreakingEven, isEnded, periodProgress, periodText, planSpanText, planTotals, shownHistory, suggestedPlanEnd } from "../../domain/leverage";
+import { redact } from "../../domain/privacy";
 import { AccountName, AuthKindIcon } from "../AccountName";
+import { BUTTON } from "../Control";
 import { providerBrandColor } from "../ProviderIcon";
 import type { PlanEditing } from "./PlanDialog";
 import { PlanDialog } from "./PlanDialog";
@@ -61,20 +66,29 @@ const CurrentPeriod = (properties: { period: LeveragePeriod; nowMs: number; isLe
   );
 };
 
-const ActivePlan = (properties: { history: PlanHistory; nowMs: number; }) => {
+const PlanSummary = (properties: { history: PlanHistory; nowMs: number; }) => {
   const totals = createMemo(() => planTotals(properties.history));
   const current = createMemo(() => properties.history.periods.find(period => !period.complete));
+  const hasEnded = createMemo(() => isEnded(properties.history.plan, properties.nowMs));
 
   return (
     <>
       <p class="flex flex-wrap items-baseline gap-x-2.5 text-sm tabular-nums">
         <span class="font-semibold text-slate-900 dark:text-slate-100">{properties.history.plan.name}</span>
         <span class="text-slate-600 dark:text-slate-400">{`${formatUsd(properties.history.plan.monthly_usd)} / month`}</span>
-        <span class="text-slate-500 dark:text-slate-500">{`since ${formatUtcDay(properties.history.plan.period_start)}`}</span>
+        <span class="text-slate-500 dark:text-slate-500">
+          {hasEnded() ? planSpanText(properties.history.plan) : `since ${formatUtcDay(properties.history.plan.period_start)}`}
+        </span>
+        <Show when={hasEnded()}>
+          <span class="flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+            <span aria-hidden="true" class="size-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+            Ended
+          </span>
+        </Show>
       </p>
       <div class="flex items-end justify-between gap-4">
         <div class="min-w-0 space-y-1.5">
-          <p class={["text-4xl leading-none font-semibold tracking-tight tabular-nums", leverageText(totals().leverage)]}>
+          <p class={["text-4xl leading-none font-semibold tracking-tight tabular-nums", hasEnded() ? "text-slate-400 dark:text-slate-500" : leverageText(totals().leverage)]}>
             {formatLeverage(totals().leverage)}
           </p>
           <p class="text-xs text-slate-600 tabular-nums dark:text-slate-400">
@@ -87,6 +101,52 @@ const ActivePlan = (properties: { history: PlanHistory; nowMs: number; }) => {
         {period => <CurrentPeriod period={period()} nowMs={properties.nowMs} isLeverageShown={properties.history.periods.length > 1} />}
       </Show>
     </>
+  );
+};
+
+const retirementText = (account: Account): string | undefined => {
+  if (account.removed_at !== undefined) return "No longer listed by CLIProxy";
+
+  if (account.disabled) return "Disabled in CLIProxy";
+
+  return account.status === "error" ? "Failing in CLIProxy" : undefined;
+};
+
+const PlanEndSuggestion = (properties: { planId: string; lastRequestAt: string; periodEnd: string; onChanged: () => void; }) => {
+  const [isSaving, setIsSaving] = createSignal(false);
+  const [failure, setFailure] = createSignal<string | undefined>();
+
+  const end = async (): Promise<void> => {
+    setIsSaving(true);
+
+    const result = await settle(async () => updatePlan(properties.planId, { period_end: properties.periodEnd }));
+
+    setIsSaving(false);
+
+    if (!result.ok) {
+      setFailure(result.message);
+
+      return;
+    }
+
+    properties.onChanged();
+  };
+
+  return (
+    <div class="relative z-10 space-y-2 rounded-panel bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
+      <p>{`The plan is still open. The last request was ${formatMoment(properties.lastRequestAt)}, so the plan most likely ended then.`}</p>
+      <button
+        type="button"
+        disabled={isSaving()}
+        onClick={() => void end()}
+        class={BUTTON}
+      >
+        {isSaving() ? "Ending plan..." : `End plan on ${formatUtcDay(properties.periodEnd)}`}
+      </button>
+      <Show when={failure()}>
+        {message => <p role="alert" class="text-red-600 dark:text-red-400">{redact(message())}</p>}
+      </Show>
+    </div>
   );
 };
 
@@ -135,6 +195,8 @@ export const AccountLeverageCard = (properties: {
   onChanged: () => void;
 }) => {
   const [editing, setEditing] = createSignal<PlanEditing | undefined>();
+  const retirement = createMemo(() => retirementText(properties.entry.account));
+  const suggestion = createMemo(() => suggestedPlanEnd(properties.entry));
 
   return (
     <li
@@ -167,11 +229,19 @@ export const AccountLeverageCard = (properties: {
           onChanged={properties.onChanged}
         />
       </div>
+      <Show when={retirement()}>
+        {text => (
+          <p class="-mt-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+            <span aria-hidden="true" class="size-1.5 shrink-0 rounded-full bg-amber-500" />
+            {text()}
+          </p>
+        )}
+      </Show>
       <Switch fallback={<p class="text-sm text-slate-500 dark:text-slate-500">No subscription plan.</p>}>
         <Match when={properties.entry.active}>
-          {active => <ActivePlan history={active()} nowMs={properties.nowMs} />}
+          {active => <PlanSummary history={active()} nowMs={properties.nowMs} />}
         </Match>
-        <Match when={properties.entry.account.plan}>
+        <Match when={isRetired(properties.entry.account) ? undefined : properties.entry.account.plan}>
           {detected => (
             <>
               <div class="space-y-1.5">
@@ -180,15 +250,15 @@ export const AccountLeverageCard = (properties: {
                   <span class="flex shrink-0 text-slate-500 dark:text-slate-400">
                     <TbOutlineCreditCard size={14} aria-hidden="true" />
                   </span>
-                  <span class="font-semibold text-slate-900 dark:text-slate-100">{detected()}</span>
+                  <span class="font-semibold text-slate-900 dark:text-slate-100">{planLabel(properties.entry.account.provider, detected())}</span>
                   <span class="text-slate-500 dark:text-slate-400">detected by CLIProxy</span>
                 </p>
-                <p class="text-xs text-slate-600 dark:text-slate-400">{`No price entered for the ${detected()} plan, so its leverage is unknown.`}</p>
+                <p class="text-xs text-slate-600 dark:text-slate-400">{`No price entered for the ${planLabel(properties.entry.account.provider, detected())} plan, so its leverage is unknown.`}</p>
               </div>
               <div>
                 <button
                   type="button"
-                  onClick={() => setEditing({ plan: undefined, suggestedName: detected() })}
+                  onClick={() => setEditing({ plan: undefined, suggestedName: planLabel(properties.entry.account.provider, detected()) })}
                   class="relative z-10 rounded-control bg-(--brand) px-3 py-1 text-sm font-medium text-white hover:bg-[color-mix(in_srgb,var(--brand)_85%,black)]"
                 >
                   Track this plan
@@ -197,10 +267,20 @@ export const AccountLeverageCard = (properties: {
             </>
           )}
         </Match>
-        <Match when={properties.entry.histories.length > 0}>
-          <p class="text-sm text-slate-500 dark:text-slate-500">No active plan.</p>
+        <Match when={shownHistory(properties.entry)}>
+          {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
         </Match>
       </Switch>
+      <Show when={suggestion()}>
+        {end => (
+          <PlanEndSuggestion
+            planId={end().planId}
+            lastRequestAt={properties.entry.account.last_seen_at}
+            periodEnd={end().periodEnd}
+            onChanged={properties.onChanged}
+          />
+        )}
+      </Show>
       <Errored fallback={null}>
         <Loading fallback={null}>
           <Show when={properties.windows}>

@@ -614,7 +614,7 @@ async fn an_unreadable_record_is_kept_without_its_secrets() {
 }
 
 #[tokio::test]
-async fn a_merged_account_hands_its_events_and_its_credential_to_the_target() {
+async fn a_merged_account_hands_its_events_its_plans_and_its_credential_to_the_target() {
     let gateway = gateway().await.expect("a gateway");
     post_batch(
         &gateway.client,
@@ -640,6 +640,16 @@ async fn a_merged_account_hands_its_events_and_its_credential_to_the_target() {
             .body_json(&json!({ "into_account_id": into }))
             .send()
     };
+    gateway
+        .client
+        .post("/api/plans")
+        .body_json(&json!({
+            "account_id": merged, "name": "Pro", "monthly_usd": 20.0,
+            "period_start": "2026-01-01T00:00:00Z",
+        }))
+        .send()
+        .await
+        .assert_status_is_ok();
     merge(&merged, &merged)
         .await
         .assert_status(StatusCode::BAD_REQUEST);
@@ -677,6 +687,10 @@ async fn a_merged_account_hands_its_events_and_its_credential_to_the_target() {
         .find(|row| row.key == target)
         .expect("the target's row");
     assert_eq!(absorbed.metrics.requests, 2);
+    let plans = gateway.client.get("/api/plans").send().await;
+    plans.assert_status_is_ok();
+    let plans = plans.json().await.value().deserialize::<Value>();
+    assert_eq!(plans["plans"][0]["account"]["account_id"], json!(target));
 
     let mut later = record(CLAUDE, "claude-1").expect("a reference record");
     later["timestamp"] = json!("2026-01-15T11:00:00+02:00");

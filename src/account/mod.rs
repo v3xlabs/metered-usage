@@ -26,7 +26,8 @@ use crate::source::Source;
 const SELECT: &str = "SELECT account.account_id, account.source_id, source.name AS source_name, \
      account.provider, account.auth_kind, account.label, account.display_name, \
      account.merged_into_account_id, credential_state.account_type, credential_state.plan, \
-     account.first_seen_at, account.last_seen_at, \
+     credential_state.status, COALESCE(credential_state.disabled, 0) AS disabled, \
+     credential_state.removed_at, account.first_seen_at, account.last_seen_at, \
      (SELECT COUNT(*) FROM usage_event WHERE usage_event.account_id = account.account_id) AS event_count \
      FROM account JOIN source ON source.source_id = account.source_id \
      LEFT JOIN credential_state ON credential_state.account_id = account.account_id";
@@ -42,6 +43,9 @@ pub struct Account {
     pub merged_into_account_id: Option<Id<Account>>,
     pub account_type: Option<String>,
     pub plan: Option<String>,
+    pub status: Option<String>,
+    pub disabled: bool,
+    pub removed_at: Option<StoredTimestamp>,
     #[sqlx(try_from = "StoredTimestamp")]
     pub first_seen_at: Timestamp,
     #[sqlx(try_from = "StoredTimestamp")]
@@ -171,8 +175,8 @@ impl Account {
         .await?)
     }
 
-    /// Moves every event of `id` onto `into` and points `id`, and every account already
-    /// merged into it, at `into`, so resolution never follows more than one step.
+    /// Moves every event and plan of `id` onto `into` and points `id`, and every account
+    /// already merged into it, at `into`, so resolution never follows more than one step.
     pub async fn merge(
         database: &Database,
         id: Id<Account>,
@@ -202,12 +206,17 @@ impl Account {
         if target.merged_into_account_id.is_some() {
             return Err(MergeError::TargetMerged);
         }
-        sqlx::query("UPDATE usage_event SET account_id = ? WHERE account_id = ?")
-            .bind(into)
-            .bind(id)
-            .execute(&mut *transaction)
-            .await
-            .map_err(DatabaseError::from)?;
+        for statement in [
+            "UPDATE usage_event SET account_id = ? WHERE account_id = ?",
+            "UPDATE plan SET account_id = ? WHERE account_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(into)
+                .bind(id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(DatabaseError::from)?;
+        }
         sqlx::query(
             "UPDATE account SET merged_into_account_id = ? \
              WHERE account_id = ? OR merged_into_account_id = ?",
