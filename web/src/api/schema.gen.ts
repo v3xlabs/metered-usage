@@ -547,6 +547,8 @@ export interface components {
              *     no longer lists it.
              */
             removed_at?: string;
+            /** @description When the last request charged to the account happened. */
+            last_used_at?: string;
             first_seen_at: string;
             last_seen_at: string;
             /** Format: int64 */

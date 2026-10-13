@@ -9,7 +9,7 @@ import { accountDescription, accountLabel, isUnlabelled, planLabel } from "../..
 import { formatMoment } from "../../domain/format";
 import { redact } from "../../domain/privacy";
 import type { QuotaLevel } from "../../domain/quota";
-import { formatAge, formatCountdown, formatWindowAmount, isBehind, quotaLevel, remainingPercent } from "../../domain/quota";
+import { formatAge, formatCountdown, formatWindowAmount, isBehind, quotaLevel, remainingPercent, statusText } from "../../domain/quota";
 import { AuthKindIcon } from "../AccountName";
 import { HealthStrip } from "../HealthStrip";
 import { IconButton } from "../IconButton";
@@ -277,7 +277,11 @@ export const QuotaCard = (properties: {
         </div>
       </div>
       <Show when={properties.entry.status_message}>
-        {message => <p class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">{message()}</p>}
+        {message => (
+          <p title={statusText(message()) === message() ? undefined : redact(message())} class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">
+            {redact(statusText(message()))}
+          </p>
+        )}
       </Show>
       <Show
         when={properties.entry.windows.length > 0}

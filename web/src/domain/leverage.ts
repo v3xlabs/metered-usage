@@ -24,7 +24,7 @@ export const periodText = (period: LeveragePeriod): string =>
   `${formatUtcDay(period.period_start)} to ${formatUtcDay(new Date(Date.parse(period.period_end) - 1).toISOString())}`;
 
 export const planSpanText = (plan: Plan): string =>
-  `${formatUtcDay(plan.period_start)} to ${plan.period_end === undefined ? "open" : formatUtcDay(plan.period_end)}`;
+  `${formatUtcDay(plan.period_start)} to ${plan.period_end === undefined ? "open" : formatUtcDay(new Date(Date.parse(plan.period_end) - 1).toISOString())}`;
 
 export const isActive = (plan: Plan, nowMs: number): boolean =>
   Date.parse(plan.period_start) <= nowMs && (plan.period_end === undefined || Date.parse(plan.period_end) > nowMs);
@@ -56,14 +56,14 @@ export const isEnded = (plan: Plan, nowMs: number): boolean =>
 // The plan the card leads with: the one running now, or else the latest.
 export const shownHistory = (entry: AccountLeverage): PlanHistory | undefined => entry.active ?? entry.histories.at(0);
 
-// Live credentials before retired ones; within each, a running plan, then one CLIProxy
-// detected but nobody priced, then an ended plan, then none.
+// A retired card does not show its detected plan, so that plan does not rank it.
 const standing = (entry: AccountLeverage): number => {
-  const retiredOffset = isRetired(entry.account) ? 4 : 0;
+  const isEntryRetired = isRetired(entry.account);
+  const retiredOffset = isEntryRetired ? 4 : 0;
 
   if (entry.active !== undefined) return retiredOffset;
 
-  if (entry.account.plan !== undefined) return retiredOffset + 1;
+  if (!isEntryRetired && entry.account.plan !== undefined) return 1;
 
   return retiredOffset + (entry.histories.length > 0 ? 2 : 3);
 };
@@ -80,8 +80,9 @@ export const byStanding = (left: AccountLeverage, right: AccountLeverage): numbe
   || right.account.event_count - left.account.event_count;
 
 // The plan CLIProxy now reports when the running plan does not name it, as after an upgrade
-// or a move to an organization seat. Names are free text, so a name that contains the
-// detected plan, such as "Claude Max" for `max`, counts as the same plan.
+// or a move to an organization seat. A plan with a known label must carry that label, so
+// "Pro 100" does not pass for `pro` (Pro 200). Other names are free text, where a name that
+// contains the detected plan, such as "Claude Max" for `max`, counts as the same plan.
 export const reportedPlanChange = (entry: AccountLeverage): string | undefined => {
   const detected = entry.account.plan;
   const running = entry.active?.plan.name.toLowerCase();
@@ -89,22 +90,29 @@ export const reportedPlanChange = (entry: AccountLeverage): string | undefined =
   if (detected === undefined || running === undefined || isRetired(entry.account)) return undefined;
 
   const label = planLabel(entry.account.provider, detected);
+  const named = label === detected ? detected.toLowerCase() : label.toLowerCase();
 
-  return running.includes(detected.toLowerCase()) || running.includes(label.toLowerCase()) ? undefined : label;
+  return running.includes(named) ? undefined : label;
 };
 
-export type PlanEndSuggestion = { planId: string; periodEnd: string; };
+export type PlanEndSuggestion = { planId: string; periodEnd: string; lastRequestAt: string | undefined; isRemoved: boolean; };
 
-// A plan still open on a credential that stopped working most likely ended with its last
-// request. `period_end` is exclusive, so the end offered is the midnight after that request.
+// A plan still open on a retired credential ended with its last request, or on the day
+// CLIProxy stopped listing a credential that carried none. CLIProxy's `error` status is
+// not a reason: it also covers a quota cooldown that lasts days. `period_end` is exclusive,
+// so the end offered is the midnight after that moment.
 export const suggestedPlanEnd = (entry: AccountLeverage): PlanEndSuggestion | undefined => {
   const plan = entry.active?.plan;
 
-  if (plan === undefined || plan.period_end !== undefined || entry.account.event_count === 0) return undefined;
+  if (plan === undefined || plan.period_end !== undefined || !isRetired(entry.account)) return undefined;
 
-  if (!isRetired(entry.account) && entry.account.status !== "error") return undefined;
+  const lastMoment = entry.account.last_used_at ?? entry.account.removed_at;
 
-  const endMs = (Math.floor(Date.parse(entry.account.last_seen_at) / MS_PER_DAY) + 1) * MS_PER_DAY;
+  if (lastMoment === undefined) return undefined;
 
-  return endMs > Date.parse(plan.period_start) ? { planId: plan.plan_id, periodEnd: new Date(endMs).toISOString() } : undefined;
+  const endMs = (Math.floor(Date.parse(lastMoment) / MS_PER_DAY) + 1) * MS_PER_DAY;
+
+  return endMs > Date.parse(plan.period_start)
+    ? { planId: plan.plan_id, periodEnd: new Date(endMs).toISOString(), lastRequestAt: entry.account.last_used_at, isRemoved: entry.account.removed_at !== undefined }
+    : undefined;
 };

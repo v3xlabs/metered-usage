@@ -30,8 +30,8 @@ const FILL: &str = "WITH ranked AS ( \
      FROM usage_event AS event \
      JOIN model_price AS price \
          ON (price.model = event.model OR price.model = event.model_alias \
-             OR (price.provider = event.provider \
-                 AND price.model = price.provider || '/' || event.model)) \
+             OR (price.model = event.provider || '/' || event.model \
+                 AND price.provider = event.provider)) \
          AND (price.origin <> 'manual' OR price.provider IS NULL \
              OR price.provider = event.provider) \
          AND (price.service_tier IS NULL OR price.service_tier = event.service_tier) \

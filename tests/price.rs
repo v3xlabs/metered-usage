@@ -483,26 +483,48 @@ async fn a_gateway_provider_name_does_not_hide_a_synced_price() -> Result<(), Fa
 }
 
 #[tokio::test]
-async fn a_key_litellm_names_only_under_its_provider_prices_the_bare_model() -> Result<(), Failure> {
+async fn a_key_litellm_names_only_under_its_provider_prices_the_bare_model() -> Result<(), Failure>
+{
     let harness = harness().await?;
-    harness.maps.public.lock().await["meta/muse-wonder-1.0"] = json!({
-        "litellm_provider": "meta",
-        "input_cost_per_token": 2e-06,
-        "output_cost_per_token": 8e-06,
-    });
+    {
+        let mut map = harness.maps.public.lock().await;
+        map["meta/muse-wonder-1.0"] = json!({
+            "litellm_provider": "meta",
+            "input_cost_per_token": 2e-06,
+            "output_cost_per_token": 8e-06,
+        });
+        map["muse-spark-1.3"] = json!({
+            "litellm_provider": "meta",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+        });
+        map["meta/muse-spark-1.3"] = json!({
+            "litellm_provider": "meta",
+            "input_cost_per_token": 9e-06,
+            "output_cost_per_token": 9e-06,
+        });
+    }
     harness.sync().await?;
-    let muse = |upstream_id: &str, provider: &str| {
+    let muse = |upstream_id: &str, provider: &str, model: &str| {
         let mut event = request(upstream_id, at("2025-06-01T00:00:00Z")?, 1000, 1000);
         provider.clone_into(&mut event.provider);
-        "muse-wonder-1.0".clone_into(&mut event.model);
+        model.clone_into(&mut event.model);
         Ok::<_, Failure>(event)
     };
     harness
-        .store("proxy", vec![muse("meta", "meta")?, muse("other", "kimi")?])
+        .store(
+            "proxy",
+            vec![
+                muse("meta", "meta", "muse-wonder-1.0")?,
+                muse("other", "kimi", "muse-wonder-1.0")?,
+                muse("bare", "meta", "muse-spark-1.3")?,
+            ],
+        )
         .await?;
     harness.fill().await?;
 
     close(harness.cost("meta").await?.list_cost_usd, 0.01);
+    close(harness.cost("bare").await?.list_cost_usd, 0.002);
     assert_eq!(
         harness.cost("other").await?.price_id,
         None,

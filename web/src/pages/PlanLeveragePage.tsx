@@ -82,13 +82,18 @@ export const PlanLeveragePage = () => {
           >
             <section class="space-y-3" aria-labelledby="leverage-plans">
               <h2 id="leverage-plans" class="text-sm font-semibold">Plans</h2>
-              <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <For each={shown()}>{entry => card(entry)}</For>
-              </ul>
+              <Show
+                when={shown().length > 0}
+                fallback={<p class="text-sm text-slate-500 dark:text-slate-500">No credential in use and no plan to show.</p>}
+              >
+                <ul class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <For each={shown()}>{entry => card(entry)}</For>
+                </ul>
+              </Show>
               <Show when={folded().length > 0}>
                 <details>
                   <summary class="cursor-pointer py-1 text-xs text-slate-500 select-none hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                    {`${folded().length} ${folded().length === 1 ? "credential" : "credentials"} no longer in CLIProxy, without a plan`}
+                    {`${folded().length} ${folded().length === 1 ? "credential" : "credentials"} disabled or no longer listed by CLIProxy, without a plan`}
                   </summary>
                   <ul class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <For each={folded()}>{entry => card(entry)}</For>

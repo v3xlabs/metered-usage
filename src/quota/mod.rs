@@ -221,9 +221,9 @@ async fn sources(
     Ok(sources)
 }
 
-/// Registers every listed credential, writes what the list says about it and marks every
-/// credential it no longer names, answering each listed credential's account with the
-/// provider that can hard refresh it, if any.
+/// Registers every listed credential, writes what the list says about it and answers each
+/// listed credential's account with the provider that can hard refresh it, if any. Only a
+/// complete listing also marks the credentials it no longer names.
 async fn store<'a>(
     state: &AppState,
     source_id: Id<Source>,
@@ -231,6 +231,7 @@ async fn store<'a>(
 ) -> Result<Vec<(Id<Account>, &'a AuthFile, Option<Provider>)>, DatabaseError> {
     let mut transaction = state.database.write().await?;
     let mut stored = Vec::with_capacity(listing.files.len());
+    let mut is_complete = listing.is_complete;
     for file in &listing.files {
         let entry = &file.entry;
         let Some(auth_index) = entry
@@ -239,6 +240,7 @@ async fn store<'a>(
             .map(str::trim)
             .filter(|index| !index.is_empty())
         else {
+            is_complete = false;
             continue;
         };
         let provider_name = entry.provider().unwrap_or_else(|| "unknown".to_owned());
@@ -277,7 +279,10 @@ async fn store<'a>(
         .await?;
         stored.push((account_id, file, provider));
     }
-    QuotaAccount::mark_unlisted(&mut transaction, source_id, listing.observed_at).await?;
+    // A credential this listing skipped is still in CLIProxy, so a partial listing marks none.
+    if is_complete {
+        QuotaAccount::mark_unlisted(&mut transaction, source_id, listing.observed_at).await?;
+    }
     transaction.commit().await?;
 
     Ok(stored)

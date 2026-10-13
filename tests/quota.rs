@@ -21,14 +21,31 @@ const MANAGEMENT_KEY: &str = "mgmt-key-7f3a9c1e5b";
 const DCA_TOKEN: &str = "dca:META-DCA-SECRET-4411";
 const META_LLM_KEY: &str = "meta-llm-key-SECRET-9921";
 const API_KEY_LABEL: &str = "sk-proj-abcdefghijklWXYZ";
+/// When the fake CLIProxy observed its first listing.
+const LISTED_AT: Timestamp = Timestamp::constant(1_790_157_600, 0);
 
-/// Every `api-call` body the fake CLIProxy received.
+/// What the fake CLIProxy received and what its credential list leaves out.
 #[derive(Clone, Default)]
-struct Calls(Arc<Mutex<Vec<Value>>>);
+struct Calls {
+    received: Arc<Mutex<Vec<Value>>>,
+    /// The `auth_index`, or for an entry without one its `name`, of every entry left out.
+    omitted: Arc<Mutex<Vec<&'static str>>>,
+    /// Listings served so far; each is observed one second after the last.
+    listings: Arc<Mutex<i64>>,
+}
 
 impl Calls {
     fn all(&self) -> Vec<Value> {
-        self.0.lock().map(|calls| calls.clone()).unwrap_or_default()
+        self.received
+            .lock()
+            .map(|calls| calls.clone())
+            .unwrap_or_default()
+    }
+
+    fn omit(&self, entries: &[&'static str]) {
+        if let Ok(mut omitted) = self.omitted.lock() {
+            *omitted = entries.to_vec();
+        }
     }
 }
 
@@ -42,13 +59,20 @@ fn authorized(request: &Request) -> bool {
 }
 
 #[handler]
-fn auth_files(request: &Request) -> Response {
+fn auth_files(request: &Request, Data(calls): Data<&Calls>) -> Response {
     if !authorized(request) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    Json(json!({
-        "observed_at": "2026-09-23T10:00:00Z",
-        "files": [
+    let listing = calls.listings.lock().map_or(0, |mut count| {
+        *count += 1;
+        *count - 1
+    });
+    let omitted = calls
+        .omitted
+        .lock()
+        .map(|omitted| omitted.clone())
+        .unwrap_or_default();
+    let files = json!([
             {
                 "id": "claude-ada.json", "auth_index": "a1", "name": "claude-ada.json",
                 "type": "claude", "provider": "claude", "label": "", "email": "ada@example.com",
@@ -92,7 +116,21 @@ fn auth_files(request: &Request) -> Response {
                 "status": "active", "disabled": false, "unavailable": false, "cooldowns": [],
             },
             { "name": "no-index.json", "type": "claude" },
-        ],
+    ]);
+    let files = files
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|file| {
+            let key = file["auth_index"]
+                .as_str()
+                .or_else(|| file["name"].as_str());
+            !key.is_some_and(|key| omitted.contains(&key))
+        })
+        .collect::<Vec<_>>();
+    Json(json!({
+        "observed_at": (LISTED_AT + SignedDuration::from_secs(listing)).to_string(),
+        "files": files,
     }))
     .into_response()
 }
@@ -112,7 +150,7 @@ fn api_call(request: &Request, Data(calls): Data<&Calls>, Json(call): Json<Value
     if !authorized(request) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    if let Ok(mut received) = calls.0.lock() {
+    if let Ok(mut received) = calls.received.lock() {
         received.push(call.clone());
     }
     let url = call["url"].as_str().unwrap_or_default();
@@ -318,56 +356,48 @@ async fn soft_sync_registers_every_credential_without_reaching_a_provider() {
 }
 
 #[tokio::test]
-async fn a_credential_the_list_leaves_out_is_marked_removed() {
+async fn only_a_complete_listing_marks_a_credential_removed_and_listing_it_again_clears_that() {
     let calls = Calls::default();
-    let (client, state) = service(&calls).await.expect("a service");
-    let sync = || client.post("/api/quota/sync").body_json(&json!({})).send();
-    sync().await.assert_status_is_ok();
-    sqlx::query(
-        "INSERT INTO account (account_id, source_id, provider, upstream_key, auth_kind, label, \
-         first_seen_at, last_seen_at) SELECT 99, source_id, 'claude', 'replaced', 'oauth', \
-         'ada@example.com', ?1, ?1 FROM account WHERE upstream_key = 'a1'",
-    )
-    .bind("2026-09-22T10:00:00.000000000Z")
-    .execute(&state.database.pool)
-    .await
-    .expect("an account");
-    sqlx::query(
-        "INSERT INTO credential_state (account_id, status, soft_observed_at) \
-         VALUES (99, 'error', '2026-09-22T10:00:00.000000000Z')",
-    )
-    .execute(&state.database.pool)
-    .await
-    .expect("its last state");
+    let (client, _state) = service(&calls).await.expect("a service");
+    let sync = |omitted: &[&'static str]| {
+        calls.omit(omitted);
+        async {
+            let response = client
+                .post("/api/quota/sync")
+                .body_json(&json!({}))
+                .send()
+                .await;
+            response.assert_status_is_ok();
+            response.json().await.value().deserialize::<Value>()
+        }
+    };
+    let removed = |synced: &Value| {
+        synced["accounts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|account| account["removed_at"].is_string())
+            .map(|account| {
+                account["account"]["provider"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
 
-    let synced = sync().await.json().await.value().deserialize::<Value>();
+    sync(&[]).await;
+    // The entry without an auth_index makes the listing partial, so nothing is marked.
+    assert!(removed(&sync(&["a1"]).await).is_empty());
 
-    let removed = synced["accounts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|account| !account["removed_at"].is_null())
-        .collect::<Vec<_>>();
-    assert_eq!(removed.len(), 1, "removed {removed:?}");
-    assert_eq!(removed[0]["removed_at"], "2026-09-23T10:00:00Z");
-    assert_eq!(removed[0]["status"], "error");
-    let accounts = client
-        .get("/api/accounts")
-        .send()
-        .await
-        .json()
-        .await
-        .value()
-        .deserialize::<Value>();
-    let replaced = accounts["accounts"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|account| account["removed_at"].is_string());
+    let complete = sync(&["a1", "no-index.json"]).await;
+    assert_eq!(removed(&complete), vec!["claude"]);
     assert_eq!(
-        replaced.map(|account| &account["status"]),
-        Some(&json!("error"))
+        by_provider(&complete, "claude")["removed_at"],
+        (LISTED_AT + SignedDuration::from_secs(2)).to_string()
     );
+
+    assert!(removed(&sync(&["no-index.json"]).await).is_empty());
 }
 
 #[tokio::test]

@@ -134,6 +134,8 @@ struct AccountOutput {
     /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
     /// no longer lists it.
     removed_at: Option<String>,
+    /// When the last request charged to the account happened.
+    last_used_at: Option<String>,
     first_seen_at: String,
     last_seen_at: String,
     event_count: i64,
@@ -156,6 +158,7 @@ impl From<Account> for AccountOutput {
             status: account.status,
             disabled: account.disabled,
             removed_at: account.removed_at.map(|at| at.0.to_string()),
+            last_used_at: account.last_used_at.map(|at| at.0.to_string()),
             first_seen_at: account.first_seen_at.to_string(),
             last_seen_at: account.last_seen_at.to_string(),
             event_count: account.event_count,

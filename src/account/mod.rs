@@ -28,6 +28,8 @@ const SELECT: &str = "SELECT account.account_id, account.source_id, source.name 
      account.merged_into_account_id, credential_state.account_type, credential_state.plan, \
      credential_state.status, COALESCE(credential_state.disabled, 0) AS disabled, \
      credential_state.removed_at, account.first_seen_at, account.last_seen_at, \
+     (SELECT MAX(occurred_at) FROM usage_event \
+         WHERE usage_event.account_id = account.account_id) AS last_used_at, \
      (SELECT COUNT(*) FROM usage_event WHERE usage_event.account_id = account.account_id) AS event_count \
      FROM account JOIN source ON source.source_id = account.source_id \
      LEFT JOIN credential_state ON credential_state.account_id = account.account_id";
@@ -46,6 +48,9 @@ pub struct Account {
     pub status: Option<String>,
     pub disabled: bool,
     pub removed_at: Option<StoredTimestamp>,
+    /// When the last request charged to the account happened. `last_seen_at` can be later:
+    /// it also counts the gateway listing the credential.
+    pub last_used_at: Option<StoredTimestamp>,
     #[sqlx(try_from = "StoredTimestamp")]
     pub first_seen_at: Timestamp,
     #[sqlx(try_from = "StoredTimestamp")]

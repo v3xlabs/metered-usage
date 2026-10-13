@@ -8,7 +8,7 @@ import { updatePlan } from "../../api/plans";
 import type { QuotaCalibration, QuotaWindow } from "../../api/quota";
 import { accountLabel, isRetired, planLabel } from "../../domain/account";
 import { formatLeverage, formatMoment, formatUsd, formatUtcDay } from "../../domain/format";
-import type { AccountLeverage, PlanHistory } from "../../domain/leverage";
+import type { AccountLeverage, PlanEndSuggestion, PlanHistory } from "../../domain/leverage";
 import { hasHistory, isBreakingEven, isEnded, periodProgress, periodText, planSpanText, planTotals, reportedPlanChange, shownHistory, suggestedPlanEnd } from "../../domain/leverage";
 import { redact } from "../../domain/privacy";
 import { AccountName, AuthKindIcon } from "../AccountName";
@@ -107,19 +107,17 @@ const PlanSummary = (properties: { history: PlanHistory; nowMs: number; }) => {
 const retirementText = (account: Account): string | undefined => {
   if (account.removed_at !== undefined) return "No longer listed by CLIProxy";
 
-  if (account.disabled) return "Disabled in CLIProxy";
-
-  return account.status === "error" ? "Failing in CLIProxy" : undefined;
+  return account.disabled ? "Disabled in CLIProxy" : undefined;
 };
 
-const PlanEndSuggestion = (properties: { planId: string; lastRequestAt: string; periodEnd: string; onChanged: () => void; }) => {
+const PlanEndNotice = (properties: { suggestion: PlanEndSuggestion; onChanged: () => void; }) => {
   const [isSaving, setIsSaving] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
 
   const end = async (): Promise<void> => {
     setIsSaving(true);
 
-    const result = await settle(async () => updatePlan(properties.planId, { period_end: properties.periodEnd }));
+    const result = await settle(async () => updatePlan(properties.suggestion.planId, { period_end: properties.suggestion.periodEnd }));
 
     setIsSaving(false);
 
@@ -134,14 +132,19 @@ const PlanEndSuggestion = (properties: { planId: string; lastRequestAt: string; 
 
   return (
     <div class="relative z-10 space-y-2 rounded-panel bg-amber-50 p-3 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400">
-      <p>{`The plan is still open. The last request was ${formatMoment(properties.lastRequestAt)}, so the plan most likely ended then.`}</p>
+      <p>
+        {properties.suggestion.lastRequestAt === undefined
+          ? "The plan is still open, but this credential carried no requests."
+          : `The plan is still open. The last request was ${formatMoment(properties.suggestion.lastRequestAt)}.`}
+        {properties.suggestion.isRemoved ? " If the credential was replaced by a new sign-in, merge it into the new one on the Accounts page instead." : ""}
+      </p>
       <button
         type="button"
         disabled={isSaving()}
         onClick={() => void end()}
         class={BUTTON}
       >
-        {isSaving() ? "Ending plan..." : `End plan on ${formatUtcDay(properties.periodEnd)}`}
+        {isSaving() ? "Ending plan..." : `End plan after ${formatUtcDay(new Date(Date.parse(properties.suggestion.periodEnd) - 1).toISOString())}`}
       </button>
       <Show when={failure()}>
         {message => <p role="alert" class="text-red-600 dark:text-red-400">{redact(message())}</p>}
@@ -273,14 +276,7 @@ export const AccountLeverageCard = (properties: {
         </Match>
       </Switch>
       <Show when={suggestion()}>
-        {end => (
-          <PlanEndSuggestion
-            planId={end().planId}
-            lastRequestAt={properties.entry.account.last_seen_at}
-            periodEnd={end().periodEnd}
-            onChanged={properties.onChanged}
-          />
-        )}
+        {end => <PlanEndNotice suggestion={end()} onChanged={properties.onChanged} />}
       </Show>
       <Show when={changed()}>
         {label => (

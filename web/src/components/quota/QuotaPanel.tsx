@@ -44,8 +44,9 @@ export const QuotaPanel = () => {
   const current = createMemo(() => accounts().filter(entry => !isRetired(entry))
     .toSorted(byLastUse));
   const hasRefreshable = createMemo(() => current().some(entry => entry.hard_refreshable));
+  // Every listing stamps the retired credentials it still names too, so they date the last sync.
   const latest = createMemo((): Latest => ({
-    soft: latestMoment(current().map(entry => entry.soft_observed_at)),
+    soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
     hard: latestMoment(current().map(entry => entry.hard_refreshed_at)),
   }));
   // The next moment a window resets, as reported or as predicted after an earlier reset.
@@ -187,7 +188,13 @@ export const QuotaPanel = () => {
           </Show>
           <Show
             when={current().length > 0}
-            fallback={<p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">No CLIProxy account has reported quota yet.</p>}
+            fallback={(
+              <p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">
+                {accounts().length === 0
+                  ? "No CLIProxy account has reported quota yet."
+                  : `All ${accounts().length} credentials are disabled or no longer listed by CLIProxy. Their history stays on the Accounts and Plan leverage pages.`}
+              </p>
+            )}
           >
             <div class="space-y-4">
               <For each={groupBySource(current(), entry => entry.account)}>

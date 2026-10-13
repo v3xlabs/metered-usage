@@ -52,7 +52,6 @@ pub struct QuotaAccount {
     /// When CLIProxy's credential list first left the credential out, as it does once the
     /// credential is deleted or replaced by a new sign-in.
     pub removed_at: Option<StoredTimestamp>,
-    /// When the last request charged to the credential happened.
     pub last_used_at: Option<StoredTimestamp>,
     #[sqlx(skip)]
     pub windows: Vec<QuotaWindow>,
@@ -123,7 +122,8 @@ impl QuotaAccount {
              plan = COALESCE(excluded.plan, credential_state.plan), \
              soft_observed_at = excluded.soft_observed_at, \
              hard_refreshable = excluded.hard_refreshable, \
-             removed_at = NULL",
+             removed_at = NULL \
+             WHERE excluded.soft_observed_at >= COALESCE(credential_state.soft_observed_at, '')",
         )
         .bind(account_id)
         .bind(entry.status.as_deref().filter(|status| !status.is_empty()))
@@ -153,8 +153,8 @@ impl QuotaAccount {
     }
 
     /// Marks every credential of the source that the list observed at `observed_at` did
-    /// not name, which [`Self::observe`] has not stamped with that instant. An earlier mark
-    /// is kept.
+    /// not name: [`Self::observe`] stamped every listed one with that instant or a later
+    /// listing's. An earlier mark is kept.
     pub async fn mark_unlisted(
         connection: &mut SqliteConnection,
         source_id: Id<Source>,
@@ -163,7 +163,7 @@ impl QuotaAccount {
         let observed_at = StoredTimestamp::from(observed_at);
         sqlx::query(
             "UPDATE credential_state SET removed_at = ?1 \
-             WHERE removed_at IS NULL AND soft_observed_at IS NOT ?1 \
+             WHERE removed_at IS NULL AND soft_observed_at < ?1 \
              AND account_id IN (SELECT account_id FROM account WHERE source_id = ?2)",
         )
         .bind(observed_at)

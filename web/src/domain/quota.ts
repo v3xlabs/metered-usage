@@ -54,10 +54,42 @@ export const latestMoment = (timestamps: readonly (string | undefined)[]): strin
 export const isBehind = (timestamp: string | undefined, latest: string | undefined): boolean =>
   latest !== undefined && (timestamp === undefined || Date.parse(latest) - Date.parse(timestamp) > BEHIND_TOLERANCE_MS);
 
-const lastUseMs = (entry: QuotaAccount): number => (entry.last_used_at === undefined ? 0 : Date.parse(entry.last_used_at));
+const MS_PER_HOUR = 3_600_000;
 
-// The credential in use comes first; those never used keep the server's order at the end.
-export const byLastUse = (left: QuotaAccount, right: QuotaAccount): number => lastUseMs(right) - lastUseMs(left);
+// By the hour of last use, so credentials CLIProxy rotates between do not swap places on
+// every re-read; within an hour the server's order holds. Never-used ones go last.
+const lastUseHour = (entry: QuotaAccount): number =>
+  (entry.last_used_at === undefined ? -1 : Math.floor(Date.parse(entry.last_used_at) / MS_PER_HOUR));
+
+export const byLastUse = (left: QuotaAccount, right: QuotaAccount): number => lastUseHour(right) - lastUseHour(left);
+
+const MESSAGE_KEYS = ["message", "error_description", "detail", "error"] as const;
+
+// CLIProxy passes an upstream error body through verbatim. Its message is read from
+// `{"error":{"message":...}}` or from the first text field CLIProxy's providers use for one,
+// such as `{"error":"..."}` or `{"detail":"..."}`; any other text is shown as it came.
+export const statusText = (statusMessage: string): string => {
+  let body: unknown;
+
+  try {
+    body = JSON.parse(statusMessage);
+  }
+  catch {
+    return statusMessage;
+  }
+
+  if (typeof body !== "object" || body === null) return statusMessage;
+
+  const inner = "error" in body && typeof body.error === "object" && body.error !== null ? body.error : body;
+
+  for (const key of MESSAGE_KEYS) {
+    const value: unknown = Reflect.get(inner, key);
+
+    if (typeof value === "string" && value.trim() !== "") return value.trim();
+  }
+
+  return statusMessage;
+};
 
 export type QuotaLevel = "comfortable" | "low" | "exhausted";
 

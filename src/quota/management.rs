@@ -50,23 +50,28 @@ impl<'a> Management<'a> {
             .await
             .map_err(ManagementError::from)?;
 
+        let raw_files = listing.files;
+        let mut is_complete = raw_files.is_some();
+        let files = raw_files
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(position, raw)| {
+                // The serde message can quote the offending value, which may be a key.
+                if let Ok(entry) = Entry::deserialize(&raw) {
+                    Some(AuthFile { entry, raw })
+                } else {
+                    tracing::warn!(position, "skipped an unreadable auth-files entry");
+                    is_complete = false;
+                    None
+                }
+            })
+            .collect();
+
         Ok(AuthFiles {
             observed_at: listing.observed_at.unwrap_or_else(Timestamp::now),
-            files: listing
-                .files
-                .unwrap_or_default()
-                .into_iter()
-                .enumerate()
-                .filter_map(|(position, raw)| {
-                    // The serde message can quote the offending value, which may be a key.
-                    if let Ok(entry) = Entry::deserialize(&raw) {
-                        Some(AuthFile { entry, raw })
-                    } else {
-                        tracing::warn!(position, "skipped an unreadable auth-files entry");
-                        None
-                    }
-                })
-                .collect(),
+            files,
+            is_complete,
         })
     }
 
@@ -115,6 +120,10 @@ pub struct AuthFiles {
     /// When CLIProxy read its own state, not when this service received it.
     pub observed_at: Timestamp,
     pub files: Vec<AuthFile>,
+    /// Whether `files` holds every credential CLIProxy knows: the list was present and every
+    /// entry could be read. Only a complete listing can tell that a credential is gone, so
+    /// `store` also treats an entry without an `auth_index` as incomplete.
+    pub is_complete: bool,
 }
 
 /// One credential as CLIProxy lists it. `raw` is the whole entry, kept in memory only,
