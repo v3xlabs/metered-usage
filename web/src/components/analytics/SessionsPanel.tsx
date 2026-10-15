@@ -30,7 +30,7 @@ export const SessionsPanel = (properties: {
     measureOf(right.metrics, properties.measure) - measureOf(left.metrics, properties.measure)));
 
   return (
-    <Panel title={`Top sessions by ${properties.measure.metric === "cost" ? "cost" : "tokens"}`} loadingLabel="Loading sessions">
+    <Panel title={`Top sessions by ${properties.measure.metric === "cost" ? "cost" : "tokens"}`} loadingLabel="Loading sessions" pendingHeightPx={700}>
       <Stale isPending={isPending(() => sessions())}>
         <Show when={sessions().length > 0} fallback={<EmptyState>No sessions in this range</EmptyState>}>
           <div class="overflow-x-auto">

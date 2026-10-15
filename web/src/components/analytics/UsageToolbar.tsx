@@ -1,13 +1,12 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
-import { TbOutlineCheck } from "solid-icons/tb";
+import { TbOutlineCheck, TbOutlineStack2 } from "solid-icons/tb";
 import { For } from "solid-js";
 
 import type { AnalyticsFilters, Dimensions, FilterDimension } from "../../api/analytics";
-import type { CostBasis, FixedRange, Metric, RangePreset, TokenKind } from "../../domain/analytics";
+import type { CostBasis, Metric, TokenKind } from "../../domain/analytics";
 import { TOKEN_KIND_LABELS, TOKEN_KINDS } from "../../domain/analytics";
 import { Chevron, POPOVER, TRIGGER } from "../Control";
 import { FilterBar } from "./FilterBar";
-import { RangeChoice } from "./RangeChoice";
 import { Segmented } from "./Segmented";
 
 const METRIC_OPTIONS: readonly { value: Metric; label: string; }[] = [
@@ -23,14 +22,15 @@ const BASIS_OPTIONS: readonly { value: CostBasis; label: string; }[] = [
 const KindsChoice = (properties: { kinds: readonly TokenKind[]; onKinds: (kinds: readonly TokenKind[]) => void; }) => (
   <DropdownMenu placement="bottom-start" gutter={4}>
     <DropdownMenu.Trigger class={TRIGGER}>
-      <span class="text-slate-600 dark:text-slate-400">Token kinds</span>
-      <span class="font-medium">
-        {properties.kinds.length === TOKEN_KINDS.length
-          ? "All"
-          : (properties.kinds.length > 1
-              ? `${properties.kinds.length} selected`
-              : properties.kinds.map(kind => TOKEN_KIND_LABELS[kind]))}
-      </span>
+      <span aria-hidden="true" class="flex shrink-0 text-slate-500 dark:text-slate-400"><TbOutlineStack2 size={14} /></span>
+      <span class="sr-only">Token kinds:</span>
+      {properties.kinds.length === TOKEN_KINDS.length
+        ? <span class="text-slate-700 dark:text-slate-300">All tokens</span>
+        : (
+            <span class="font-medium">
+              {properties.kinds.length > 1 ? `${properties.kinds.length} kinds` : properties.kinds.map(kind => TOKEN_KIND_LABELS[kind])}
+            </span>
+          )}
       <Chevron />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
@@ -68,32 +68,22 @@ const KindsChoice = (properties: { kinds: readonly TokenKind[]; onKinds: (kinds:
   </DropdownMenu>
 );
 
+// What is measured on the first row, which usage it is measured over on the second, so a
+// chip that grows with its chosen value never moves the other row.
 export const UsageToolbar = (properties: {
-  range: RangePreset;
-  firstDay: string;
-  lastDay: string;
   metric: Metric;
   kinds: readonly TokenKind[];
   basis: CostBasis;
   filters: AnalyticsFilters;
   dimensions: Dimensions;
-  onRange: (range: FixedRange) => void;
-  onCustom: (firstDay: string, lastDay: string) => void;
   onMetric: (metric: Metric) => void;
   onKinds: (kinds: readonly TokenKind[]) => void;
   onBasis: (basis: CostBasis) => void;
   onFilter: (dimension: FilterDimension, values: readonly string[]) => void;
   onClear: () => void;
 }) => (
-  <div class="space-y-3">
-    <div class="flex flex-wrap items-center gap-3">
-      <RangeChoice
-        range={properties.range}
-        firstDay={properties.firstDay}
-        lastDay={properties.lastDay}
-        onRange={properties.onRange}
-        onCustom={properties.onCustom}
-      />
+  <div class="space-y-2">
+    <div class="flex flex-wrap items-center gap-2">
       <Segmented
         label="Metric"
         value={properties.metric}

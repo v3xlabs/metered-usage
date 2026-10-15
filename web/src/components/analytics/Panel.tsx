@@ -6,6 +6,7 @@ import { RegionFailure, RegionPending } from "../Region";
 export const Panel = (properties: {
   title: string;
   loadingLabel: string;
+  pendingHeightPx: number;
   actions?: JSX.Element;
   class?: string;
   children?: JSX.Element;
@@ -18,7 +19,7 @@ export const Panel = (properties: {
       </Show>
     </div>
     <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-      <Loading fallback={<RegionPending label={properties.loadingLabel} />}>
+      <Loading fallback={<RegionPending label={properties.loadingLabel} heightPx={properties.pendingHeightPx} />}>
         {properties.children}
       </Loading>
     </Errored>

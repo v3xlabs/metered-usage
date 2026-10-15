@@ -75,7 +75,7 @@ export const CachePanel = (properties: {
   dimension: FilterDimension;
   dimensions: Dimensions;
 }) => (
-  <Panel title="Cache efficiency" loadingLabel="Loading cache efficiency">
+  <Panel title="Cache efficiency" loadingLabel="Loading cache efficiency" pendingHeightPx={400}>
     <Stale isPending={isPending(() => properties.breakdown)}>
       <Show when={tokenSum(properties.breakdown.total) > 0} fallback={<EmptyState>No tokens in this range</EmptyState>}>
         <div class="space-y-3">

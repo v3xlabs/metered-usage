@@ -4,10 +4,10 @@ import { createMemo, Errored, For, Loading } from "solid-js";
 import type { AnalyticsScope } from "../api/analytics";
 import { fetchSeries, fetchSummary } from "../api/analytics";
 import { Segmented } from "../components/analytics/Segmented";
-import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
+import { SERIES_CHART_PENDING_HEIGHT_PX, TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 import { QuotaPanel } from "../components/quota/QuotaPanel";
 import { RegionFailure, RegionPending } from "../components/Region";
-import { TotalsStrip } from "../components/TotalsStrip";
+import { TotalsStrip, TotalsStripPending } from "../components/TotalsStrip";
 import { browserTimeZone, EMPTY_FILTERS, resolveWindow } from "../domain/analytics";
 
 type OverviewMetric = "cost" | "tokens";
@@ -31,7 +31,7 @@ const TotalsRegion = (properties: { scope: AnalyticsScope; }) => {
 
   return (
     <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-      <Loading fallback={<RegionPending label="Loading totals" />}>
+      <Loading fallback={<TotalsStripPending />}>
         <TotalsStrip summary={summary()} />
       </Loading>
     </Errored>
@@ -59,7 +59,7 @@ const SeriesRegion = (properties: { scope: AnalyticsScope; metric: OverviewMetri
 
   return (
     <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-      <Loading fallback={<RegionPending label={`Loading ${period()}`} />}>
+      <Loading fallback={<RegionPending label={`Loading ${period()}`} heightPx={SERIES_CHART_PENDING_HEIGHT_PX} />}>
         <TimeSeriesChart
           buckets={series()}
           mode="stacked-bar"

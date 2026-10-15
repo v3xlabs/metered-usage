@@ -180,7 +180,7 @@ export const ComparePanel = (properties: {
   });
 
   return (
-    <Panel title="Compare" loadingLabel="Loading comparison">
+    <Panel title="Compare" loadingLabel="Loading comparison" pendingHeightPx={154}>
       <div class="space-y-4">
         <div class="grid gap-3 sm:grid-cols-2">
           <SliceChoice

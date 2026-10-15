@@ -47,7 +47,7 @@ export const ModelTable = (properties: {
   const busiest = (): number => Math.max(1, ...properties.breakdown.rows.map(row => row.metrics.requests));
 
   return (
-    <Panel title="Models" loadingLabel="Loading models">
+    <Panel title="Models" loadingLabel="Loading models" pendingHeightPx={224}>
       <Stale isPending={isPending(() => properties.breakdown)}>
         <Show when={properties.breakdown.rows.length > 0} fallback={<EmptyState>No requests in this range</EmptyState>}>
           <div class="overflow-x-auto">

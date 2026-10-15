@@ -6,6 +6,10 @@ import type { Card } from "../analytics/SummaryCards";
 import { CardCell } from "../analytics/SummaryCards";
 
 const PERCENT = 100;
+const GRID = "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8";
+const BLANK = "\u{A0}";
+// One per card `ModelCards` shows, each at the height of a card with a detail line.
+const PENDING_CARDS: readonly Card[] = Array.from({ length: 8 }, () => ({ label: BLANK, value: BLANK, detail: BLANK }));
 
 export const ModelCards = (properties: { summary: Summary; }) => {
   const cards = createMemo((): readonly Card[] => {
@@ -33,8 +37,14 @@ export const ModelCards = (properties: { summary: Summary; }) => {
   });
 
   return (
-    <dl class="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
+    <dl class={GRID}>
       <For each={cards()}>{card => <CardCell card={card} />}</For>
     </dl>
   );
 };
+
+export const ModelCardsPending = () => (
+  <dl role="status" aria-label="Loading summary" class={[GRID, "animate-pulse"]}>
+    <For each={PENDING_CARDS}>{card => <CardCell card={card} />}</For>
+  </dl>
+);

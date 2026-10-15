@@ -6,14 +6,14 @@ import { createAnalyticsScope } from "../app/analyticsScope";
 import { FilterBar } from "../components/analytics/FilterBar";
 import { PageHeading } from "../components/analytics/PageHeading";
 import { RangeChoice } from "../components/analytics/RangeChoice";
-import { ModelCards } from "../components/models/ModelCards";
+import { ModelCards, ModelCardsPending } from "../components/models/ModelCards";
 import { ModelTable } from "../components/models/ModelTable";
 import type { TrendMeasure } from "../components/models/ModelTrendsPanel";
 import { ModelTrendsPanel, TREND_MEASURES } from "../components/models/ModelTrendsPanel";
 import type { ScatterX, ScatterY } from "../components/models/RequestScatterPanel";
 import { RequestScatterPanel, SCATTER_X, SCATTER_Y } from "../components/models/RequestScatterPanel";
 import { SpreadPanel } from "../components/models/SpreadPanel";
-import { RegionFailure, RegionPending } from "../components/Region";
+import { RegionFailure } from "../components/Region";
 import type { SampleMeasure } from "../domain/requestSample";
 import { SAMPLE_MEASURES } from "../domain/requestSample";
 
@@ -53,26 +53,23 @@ export const AnalyticsModelsPage = () => {
 
   return (
     <div class="space-y-6">
-      <PageHeading title="Models" usageWindow={analytics.usageWindow()} />
-      <div class="space-y-3">
-        <div class="flex flex-wrap items-center gap-3">
-          <RangeChoice
-            range={analytics.range()}
-            firstDay={analytics.usageWindow().firstDay}
-            lastDay={analytics.usageWindow().lastDay}
-            onRange={analytics.chooseRange}
-            onCustom={analytics.chooseCustom}
-          />
-        </div>
-        <FilterBar
-          filters={analytics.filters()}
-          dimensions={analytics.dimensions()}
-          onFilter={analytics.chooseFilter}
-          onClear={analytics.clearFilters}
+      <PageHeading title="Models" usageWindow={analytics.usageWindow()}>
+        <RangeChoice
+          range={analytics.range()}
+          firstDay={analytics.usageWindow().firstDay}
+          lastDay={analytics.usageWindow().lastDay}
+          onRange={analytics.chooseRange}
+          onCustom={analytics.chooseCustom}
         />
-      </div>
+      </PageHeading>
+      <FilterBar
+        filters={analytics.filters()}
+        dimensions={analytics.dimensions()}
+        onFilter={analytics.chooseFilter}
+        onClear={analytics.clearFilters}
+      />
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading summary" />}>
+        <Loading fallback={<ModelCardsPending />}>
           <ModelCards summary={summary()} />
         </Loading>
       </Errored>

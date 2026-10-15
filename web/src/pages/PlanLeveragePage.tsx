@@ -75,7 +75,7 @@ export const PlanLeveragePage = () => {
     <div class="space-y-8">
       <h1 class="sr-only">Plan leverage</h1>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading plans" />}>
+        <Loading fallback={<RegionPending label="Loading plans" heightPx={408} isOnCanvas />}>
           <Show
             when={entries().length > 0}
             fallback={<p class="rounded-panel bg-surface px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-500">No accounts seen yet.</p>}

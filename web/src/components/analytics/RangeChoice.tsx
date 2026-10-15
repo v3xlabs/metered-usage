@@ -33,7 +33,7 @@ export const RangeChoice = (properties: {
     <Popover
       open={isOpen()}
       onOpenChange={setIsOpen}
-      placement="bottom-start"
+      placement="bottom-end"
       gutter={4}
     >
       <Popover.Trigger class={TRIGGER}>

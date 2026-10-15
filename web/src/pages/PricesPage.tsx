@@ -226,7 +226,7 @@ export const PricesPage = () => {
       </section>
       <ManualPriceForm onCreated={reload} />
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading prices" />}>
+        <Loading fallback={<RegionPending label="Loading prices" heightPx={600} isOnCanvas />}>
           <PriceTable prices={prices()} />
         </Loading>
       </Errored>

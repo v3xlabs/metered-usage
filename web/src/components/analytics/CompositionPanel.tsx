@@ -4,7 +4,7 @@ import type { AnalyticsScope, Bucket } from "../../api/analytics";
 import { fetchSeries } from "../../api/analytics";
 import type { Metric, TokenKind } from "../../domain/analytics";
 import { COST_KIND_FIELDS, TOKEN_KIND_COLORS, TOKEN_KIND_FIELDS, TOKEN_KIND_LABELS, TOKEN_KINDS } from "../../domain/analytics";
-import { TimeSeriesChart } from "../charts/TimeSeriesChart";
+import { SERIES_CHART_PENDING_HEIGHT_PX, TimeSeriesChart } from "../charts/TimeSeriesChart";
 import type { StackMode } from "./OverTimePanel";
 import { EmptyState, Panel, Stale } from "./Panel";
 
@@ -23,6 +23,7 @@ export const CompositionPanel = (properties: { scope: AnalyticsScope; bucket: Bu
     <Panel
       title={isCost() ? "Cost composition over time, at list price" : "Token composition over time"}
       loadingLabel="Loading composition"
+      pendingHeightPx={SERIES_CHART_PENDING_HEIGHT_PX}
     >
       <Stale isPending={isPending(() => points())}>
         <Show

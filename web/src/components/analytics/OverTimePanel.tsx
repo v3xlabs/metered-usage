@@ -6,7 +6,7 @@ import { fetchSeries } from "../../api/analytics";
 import type { Measure } from "../../domain/analytics";
 import { BUCKET_LABELS, BUCKETS, DIMENSION_LABELS, FILTER_DIMENSIONS, labelKey, measureOf, rankByOf } from "../../domain/analytics";
 import type { ChartFormat, ChartMode } from "../charts/TimeSeriesChart";
-import { colorFor, TimeSeriesChart } from "../charts/TimeSeriesChart";
+import { colorFor, SERIES_CHART_PENDING_HEIGHT_PX, TimeSeriesChart } from "../charts/TimeSeriesChart";
 import { Select } from "../Control";
 import { KeyName } from "./KeyName";
 import { EmptyState, Panel, Stale } from "./Panel";
@@ -110,6 +110,7 @@ export const OverTimePanel = (properties: {
     <Panel
       title={`${properties.measure.metric === "cost" ? "Cost" : "Tokens"} over time by ${DIMENSION_LABELS[properties.dimension].toLowerCase()}`}
       loadingLabel="Loading time series"
+      pendingHeightPx={SERIES_CHART_PENDING_HEIGHT_PX}
       actions={(
         <>
           <Segmented

@@ -57,6 +57,7 @@ export const SpreadPanel = (properties: {
     <Panel
       title="Spread per model"
       loadingLabel="Loading spread"
+      pendingHeightPx={160}
       actions={(
         <Segmented
           label="Measure"
