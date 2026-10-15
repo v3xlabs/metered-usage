@@ -87,6 +87,7 @@ pub fn routes(state: &Arc<AppState>) -> impl Endpoint<Output = poem::Response> +
             MOUNT,
             api.with(RequireCredential {
                 token: state.token.clone(),
+                read_token: state.read_token.clone(),
             }),
         )
         .at(
@@ -95,6 +96,7 @@ pub fn routes(state: &Arc<AppState>) -> impl Endpoint<Output = poem::Response> +
                 .into_endpoint()
                 .with(RequireCredential {
                     token: state.token.clone(),
+                    read_token: None,
                 }),
         )
         .at("/openapi.json", document)

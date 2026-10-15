@@ -6,10 +6,9 @@ use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 use crate::analytics::AnalyticsError;
 use crate::analytics::bucket::Bucket;
-use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::filter::{AnalyticsFilter, Recorded, Shift};
 use crate::analytics::metrics::UsageMetrics;
 use crate::analytics::query::{Aggregate, Column, aggregate};
-use crate::database::codec::StoredTimestamp;
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -63,6 +62,36 @@ struct Overall {
     cache_hit_rate: Option<f64>,
 }
 
+impl Overall {
+    async fn load(
+        database: &Database,
+        filter: &AnalyticsFilter,
+        shift: &Shift,
+    ) -> Result<Self, AnalyticsError> {
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT COUNT(DISTINCT usage_event.model) AS models, \
+             COUNT(DISTINCT usage_event.provider) AS providers, \
+             COUNT(DISTINCT usage_event.account_id) AS accounts, \
+             COUNT(DISTINCT COALESCE(usage_event.harness, 'unknown')) AS harnesses, \
+             COUNT(DISTINCT usage_event.source_id) AS sources, \
+             COUNT(DISTINCT usage_event.session_id) AS sessions, \
+             COUNT(DISTINCT ",
+        );
+        Bucket::Day.push_expression(&mut builder, shift);
+        builder.push(
+            ") AS active_days, \
+             TOTAL(usage_event.cache_read_tokens) / NULLIF(TOTAL(usage_event.input_tokens), 0) \
+             AS cache_hit_rate FROM usage_event",
+        );
+        filter.push_where(&mut builder);
+
+        Ok(builder
+            .build_query_as::<Self>()
+            .fetch_one(&database.pool)
+            .await?)
+    }
+}
+
 #[derive(FromRow)]
 struct DayRow {
     day: String,
@@ -76,37 +105,19 @@ impl Summary {
         filter: &AnalyticsFilter,
     ) -> Result<Self, AnalyticsError> {
         filter.check(database).await?;
-        let days = aggregate(filter, &[(Column::Bucket(Bucket::Day), "day")], None)
-            .build_query_as::<DayRow>()
-            .fetch_all(&database.pool)
-            .await?;
-
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT COUNT(DISTINCT usage_event.model) AS models, \
-             COUNT(DISTINCT usage_event.provider) AS providers, \
-             COUNT(DISTINCT usage_event.account_id) AS accounts, \
-             COUNT(DISTINCT COALESCE(usage_event.harness, 'unknown')) AS harnesses, \
-             COUNT(DISTINCT usage_event.source_id) AS sources, \
-             COUNT(DISTINCT usage_event.session_id) AS sessions, \
-             COUNT(DISTINCT ",
-        );
-        Bucket::Day.push_expression(&mut builder, filter);
-        builder.push(
-            ") AS active_days, \
-             TOTAL(usage_event.cache_read_tokens) / NULLIF(TOTAL(usage_event.input_tokens), 0) \
-             AS cache_hit_rate FROM usage_event",
-        );
-        filter.push_where(&mut builder);
-        let overall = builder
-            .build_query_as::<Overall>()
-            .fetch_one(&database.pool)
-            .await?;
-        let tracked_since = sqlx::query_scalar::<_, Option<StoredTimestamp>>(
-            "SELECT MIN(occurred_at) FROM usage_event",
+        let recorded = Recorded::load(database).await?;
+        let shift = filter.shift(recorded);
+        let days = aggregate(
+            filter,
+            &[(Column::Bucket(Bucket::Day, &shift), "day")],
+            None,
         )
-        .fetch_one(&database.pool)
-        .await?
-        .map(Timestamp::from);
+        .build_query_as::<DayRow>()
+        .fetch_all(&database.pool)
+        .await?;
+
+        let overall = Overall::load(database, filter, &shift).await?;
+        let tracked_since = recorded.map(|recorded| recorded.first);
 
         let mut metrics = UsageMetrics::default();
         let mut peak_day_by_cost: Option<PeakDay> = None;
@@ -180,9 +191,9 @@ impl Summary {
 }
 
 fn range_days(filter: &AnalyticsFilter, from: Timestamp) -> Result<i32, AnalyticsError> {
-    let first = filter.offset.to_datetime(from).date();
+    let first = filter.time_zone.to_datetime(from).date();
     let last_instant = filter.to.checked_sub(SignedDuration::from_nanos(1))?;
-    let last = filter.offset.to_datetime(last_instant).date();
+    let last = filter.time_zone.to_datetime(last_instant).date();
     if last < first {
         return Ok(0);
     }

@@ -162,7 +162,7 @@ export const autoBucket = (days: number): Bucket => {
   return days <= DAY_BUCKET_MAX_DAYS ? "day" : "week";
 };
 
-export const utcOffsetMinutes = (): number => -new Date().getTimezoneOffset();
+export const browserTimeZone = (): string => new Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export type KeyLabel = { text: string; provider?: string; };
 

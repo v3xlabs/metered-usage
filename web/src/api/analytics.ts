@@ -21,14 +21,14 @@ export type AnalyticsFilters = Readonly<Record<FilterDimension, readonly string[
 export type AnalyticsScope = {
   from?: string | undefined;
   to?: string | undefined;
-  utcOffsetMinutes: number;
+  timeZone: string;
   filters: AnalyticsFilters;
 };
 
 const scopeQuery = (scope: AnalyticsScope) => ({
   ...(scope.from !== undefined && { from: scope.from }),
   ...(scope.to !== undefined && { to: scope.to }),
-  utc_offset_minutes: scope.utcOffsetMinutes,
+  time_zone: scope.timeZone,
   ...(scope.filters.source.length > 0 && { source_id: [...scope.filters.source] }),
   ...(scope.filters.account.length > 0 && { account_id: [...scope.filters.account] }),
   ...(scope.filters.model.length > 0 && { model: [...scope.filters.model] }),

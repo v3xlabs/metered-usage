@@ -13,6 +13,8 @@ const USAGE_BACKLOG: usize = 1024;
 pub struct AppState {
     pub database: Database,
     pub token: Token,
+    /// Admits `GET` under the API only. Absent, only `token` admits.
+    pub read_token: Option<Token>,
     pub config: Config,
     /// Every event ingest committed, in commit order per batch, and every cost a price
     /// fill committed afterwards.
@@ -24,10 +26,16 @@ pub struct AppState {
 impl AppState {
     /// Fails when the platform has no usable certificate store, which `reqwest::Client::new`
     /// would answer with a panic instead.
-    pub fn new(database: Database, token: Token, config: Config) -> Result<Self, reqwest::Error> {
+    pub fn new(
+        database: Database,
+        token: Token,
+        read_token: Option<Token>,
+        config: Config,
+    ) -> Result<Self, reqwest::Error> {
         Ok(Self {
             database,
             token,
+            read_token,
             config,
             usage: broadcast::channel(USAGE_BACKLOG).0,
             http: reqwest::Client::builder().build()?,

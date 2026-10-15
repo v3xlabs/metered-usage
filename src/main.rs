@@ -16,6 +16,7 @@ const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_DATABASE_URL: &str = "sqlite:metered-usage.db";
 const DUMP_OPENAPI: &str = "--dump-openapi";
 const TOKEN_VARIABLE: &str = "METERED_USAGE_TOKEN";
+const READ_TOKEN_VARIABLE: &str = "METERED_USAGE_READ_TOKEN";
 const CONFIG_VARIABLE: &str = "METERED_USAGE_CONFIG";
 
 #[tokio::main]
@@ -40,7 +41,8 @@ async fn main() -> Result<(), std::io::Error> {
         let token =
             Token::try_from(rand::random::<u128>().to_string()).map_err(std::io::Error::other)?;
         let state = Arc::new(
-            AppState::new(database, token, Config::default()).map_err(std::io::Error::other)?,
+            AppState::new(database, token, None, Config::default())
+                .map_err(std::io::Error::other)?,
         );
         if let Some(parent) = Path::new(path)
             .parent()
@@ -59,14 +61,11 @@ async fn main() -> Result<(), std::io::Error> {
                 format!("{TOKEN_VARIABLE} must hold the shared access token: {error}"),
             )
         })
-        .and_then(|token| {
-            Token::try_from(token).map_err(|error| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("{TOKEN_VARIABLE}: {error}"),
-                )
-            })
-        })?;
+        .and_then(|token| parse_token(TOKEN_VARIABLE, token))?;
+    let read_token = std::env::var(READ_TOKEN_VARIABLE)
+        .ok()
+        .map(|token| parse_token(READ_TOKEN_VARIABLE, token))
+        .transpose()?;
     let database_url = environment("DATABASE_URL", DEFAULT_DATABASE_URL);
     let address = match std::env::var("BIND_ADDRESS") {
         Ok(address) => address.parse::<SocketAddr>().map_err(|error| {
@@ -102,11 +101,13 @@ async fn main() -> Result<(), std::io::Error> {
     Source::sync(&database, &config)
         .await
         .map_err(std::io::Error::other)?;
-    let state = Arc::new(AppState::new(database, token, config).map_err(|error| {
-        std::io::Error::other(format!(
-            "no HTTP client, most likely no CA certificate store on this host: {error}"
-        ))
-    })?);
+    let state = Arc::new(
+        AppState::new(database, token, read_token, config).map_err(|error| {
+            std::io::Error::other(format!(
+                "no HTTP client, most likely no CA certificate store on this host: {error}"
+            ))
+        })?,
+    );
     dead_letter::spawn_pruning(Arc::clone(&state));
     metered_usage::collector::spawn_all(Arc::clone(&state));
     metered_usage::price::spawn(Arc::clone(&state));
@@ -120,4 +121,13 @@ async fn main() -> Result<(), std::io::Error> {
 
 fn environment(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+fn parse_token(variable: &str, value: String) -> Result<Token, std::io::Error> {
+    Token::try_from(value).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{variable}: {error}"),
+        )
+    })
 }

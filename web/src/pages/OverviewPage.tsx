@@ -8,7 +8,7 @@ import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 import { QuotaPanel } from "../components/quota/QuotaPanel";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { TotalsStrip } from "../components/TotalsStrip";
-import { EMPTY_FILTERS, resolveWindow, utcOffsetMinutes } from "../domain/analytics";
+import { browserTimeZone, EMPTY_FILTERS, resolveWindow } from "../domain/analytics";
 
 type OverviewMetric = "cost" | "tokens";
 
@@ -78,7 +78,7 @@ export const OverviewPage = () => {
   const range = createMemo((): OverviewRange => (searchParameters.range === "today" ? "today" : "7d"));
   const scope = createMemo((): AnalyticsScope => ({
     from: resolveWindow(range(), undefined, undefined).from,
-    utcOffsetMinutes: utcOffsetMinutes(),
+    timeZone: browserTimeZone(),
     filters: EMPTY_FILTERS,
   }));
 

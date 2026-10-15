@@ -17,6 +17,7 @@ const ANTIGRAVITY: &str = include_str!("fixtures/antigravity.json");
 const CLAUDE: &str = include_str!("fixtures/claude.json");
 const GROK: &str = include_str!("fixtures/grok.json");
 const TOKEN: &str = "correct horse battery staple";
+const READ_TOKEN: &str = "a dashboard that only reads";
 const API_KEY: &str = "sk-test-0123456789abcd";
 const CONFIG: &str = r#"
     [[source]]
@@ -166,7 +167,8 @@ async fn gateway() -> Result<Gateway<impl Endpoint>, Box<dyn std::error::Error>>
     let database = Database::open("sqlite::memory:", 0).await?;
     StoredSource::sync(&database, &config).await?;
     let token = Token::try_from(TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, config)?);
+    let read_token = Token::try_from(READ_TOKEN.to_owned())?;
+    let state = Arc::new(AppState::new(database, token, Some(read_token), config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
     let anonymous = TestClient::new(metered_usage::http::routes(&state));
@@ -773,6 +775,37 @@ async fn usage_is_read_only_with_the_token() {
         .send()
         .await;
     admitted.assert_status_is_ok();
+}
+
+#[tokio::test]
+async fn the_read_token_reads_and_never_writes() {
+    let gateway = gateway().await.expect("a gateway");
+    let bearer = format!("Bearer {READ_TOKEN}");
+
+    let read = gateway
+        .anonymous
+        .get("/api/analytics/summary")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    read.assert_status_is_ok();
+
+    let write = gateway
+        .anonymous
+        .post("/api/prices/reprice")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({}))
+        .send()
+        .await;
+    write.assert_status(StatusCode::UNAUTHORIZED);
+
+    let mcp = gateway
+        .anonymous
+        .get("/mcp")
+        .header(header::AUTHORIZATION, &bearer)
+        .send()
+        .await;
+    mcp.assert_status(StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

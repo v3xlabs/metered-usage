@@ -8,7 +8,7 @@ use sqlx::FromRow;
 use crate::analytics::AnalyticsError;
 use crate::analytics::bucket::Bucket;
 use crate::analytics::dimension::Dimension;
-use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::filter::{AnalyticsFilter, Recorded};
 use crate::analytics::metrics::{RankBy, UsageMetrics};
 use crate::analytics::query::{Aggregate, Column, aggregate};
 use crate::prelude::*;
@@ -31,6 +31,8 @@ pub struct SeriesQuery {
 pub struct SeriesBucket {
     pub start: Timestamp,
     pub key: String,
+    /// See [`Dimension::labels`].
+    pub label: Option<String>,
     pub metrics: UsageMetrics,
 }
 
@@ -51,13 +53,14 @@ impl SeriesBucket {
         query: SeriesQuery,
     ) -> Result<Vec<Self>, AnalyticsError> {
         filter.check(database).await?;
+        let shift = filter.shift(Recorded::load(database).await?);
         let group = query
             .group_by
             .map_or(Column::Expression("'all'"), Column::Key);
         let rows = aggregate(
             filter,
             &[
-                (Column::Bucket(query.bucket), "bucket_key"),
+                (Column::Bucket(query.bucket, &shift), "bucket_key"),
                 (group, "group_key"),
             ],
             None,
@@ -72,7 +75,7 @@ impl SeriesBucket {
         else {
             return Ok(Vec::new());
         };
-        let starts = query.bucket.starts(from, filter.to, filter.offset)?;
+        let starts = query.bucket.starts(from, filter.to, &filter.time_zone)?;
 
         let mut totals = HashMap::<&str, UsageMetrics>::new();
         for row in &rows {
@@ -120,15 +123,19 @@ impl SeriesBucket {
         }
 
         let group_by = query.group_by;
+        let mut labels = match group_by {
+            Some(dimension) => dimension.labels(database, keys.iter().copied()).await?,
+            None => HashMap::new(),
+        };
         let mut names = keys
             .into_iter()
             .map(|key| match group_by {
-                Some(dimension) => dimension.key(key.to_owned()),
-                None => Ok(ALL.to_owned()),
+                Some(dimension) => Ok((dimension.key(key.to_owned())?, labels.remove(key))),
+                None => Ok((ALL.to_owned(), None)),
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
         if merged {
-            names.push(OTHER.to_owned());
+            names.push((OTHER.to_owned(), None));
         }
 
         Ok(starts
@@ -140,9 +147,10 @@ impl SeriesBucket {
                     .enumerate()
                     .map(move |(key, name)| (bucket, start, key, name))
             })
-            .map(|(bucket, start, key, name)| Self {
+            .map(|(bucket, start, key, (name, label))| Self {
                 start: start.start,
                 key: name.clone(),
+                label: label.clone(),
                 metrics: cells[bucket * width + key],
             })
             .collect())

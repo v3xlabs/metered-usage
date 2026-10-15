@@ -4,7 +4,7 @@ import { createMemo } from "solid-js";
 import type { AnalyticsFilters, AnalyticsScope, Bucket, FilterDimension } from "../api/analytics";
 import { fetchDimensions } from "../api/analytics";
 import type { FixedRange, RangePreset } from "../domain/analytics";
-import { autoBucket, BUCKETS, EMPTY_FILTERS, RANGE_PRESETS, resolveWindow, utcOffsetMinutes } from "../domain/analytics";
+import { autoBucket, browserTimeZone, BUCKETS, EMPTY_FILTERS, RANGE_PRESETS, resolveWindow } from "../domain/analytics";
 
 type ScopeSearch = {
   range: string;
@@ -42,11 +42,11 @@ export const createAnalyticsScope = () => {
     harness: listOf(search.harness),
     source: listOf(search.source),
   }));
-  const offsetMinutes = utcOffsetMinutes();
+  const timeZone = browserTimeZone();
   const scope = createMemo((): AnalyticsScope => ({
     from: usageWindow().from,
     to: usageWindow().to,
-    utcOffsetMinutes: offsetMinutes,
+    timeZone,
     filters: filters(),
   }));
   const dimensions = createMemo(() => fetchDimensions({ ...scope(), filters: EMPTY_FILTERS }));

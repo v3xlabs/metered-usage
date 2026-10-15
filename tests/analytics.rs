@@ -121,6 +121,7 @@ struct Series {
 struct SeriesBucket {
     start: String,
     key: String,
+    label: Option<String>,
     metrics: Metrics,
 }
 
@@ -133,6 +134,7 @@ struct Breakdown {
 #[derive(Debug, Deserialize)]
 struct BreakdownRow {
     key: String,
+    label: Option<String>,
     metrics: Metrics,
 }
 
@@ -334,7 +336,7 @@ async fn harness() -> Result<Harness<impl Endpoint>, Failure> {
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
     let token = Token::try_from(TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, config)?);
+    let state = Arc::new(AppState::new(database, token, None, config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
 
@@ -556,15 +558,16 @@ async fn cache_writes_that_outweigh_reads_save_a_negative_amount() -> Result<(),
 }
 
 #[tokio::test]
-async fn a_local_day_follows_the_viewers_offset() -> Result<(), Failure> {
+async fn a_local_day_follows_the_viewers_time_zone() -> Result<(), Failure> {
     let harness = harness().await?;
 
     let utc = harness
         .get::<Series>(&format!("/api/analytics/series?bucket=day&{WEEK}"))
         .await;
+    // POSIX names count west as positive, so this is two hours ahead of UTC.
     let local = harness
         .get::<Series>(&format!(
-            "/api/analytics/series?bucket=day&utc_offset_minutes=120&{WEEK}"
+            "/api/analytics/series?bucket=day&time_zone=Etc/GMT-2&{WEEK}"
         ))
         .await;
 
@@ -594,11 +597,147 @@ async fn a_local_day_follows_the_viewers_offset() -> Result<(), Failure> {
 
     let local_summary = harness
         .get::<Summary>(&format!(
-            "/api/analytics/summary?utc_offset_minutes=120&{WEEK}"
+            "/api/analytics/summary?time_zone=Etc/GMT-2&{WEEK}"
         ))
         .await;
     assert_eq!(local_summary.range_days, 8);
     assert_eq!(local_summary.active_days, 3);
+
+    Ok(())
+}
+
+/// One Codex request at `at`, for tests that only count requests.
+fn codex_at(at: &'static str) -> Request {
+    Request {
+        upstream_id: at,
+        at,
+        model: CODEX,
+        provider: "codex",
+        account: ("b1", AuthKind::ApiKey),
+        harness: None,
+        session: None,
+        input: 1000,
+        cache_read: 0,
+        cache_write: 0,
+        output: 100,
+        latency_ms: None,
+        ttft_ms: None,
+        failed: false,
+    }
+}
+
+fn requests_per_start(series: Series) -> Vec<(String, i64)> {
+    series
+        .buckets
+        .into_iter()
+        .map(|bucket| (bucket.start, bucket.metrics.requests))
+        .collect()
+}
+
+/// Amsterdam moves from +01:00 to +02:00 at 01:00 UTC on 2026-03-29, and back at 01:00 UTC
+/// on 2026-10-25.
+#[tokio::test]
+async fn buckets_follow_the_clock_across_daylight_saving() -> Result<(), Failure> {
+    let harness = harness().await?;
+    let requests = [
+        "2026-03-28T23:30:00Z",
+        "2026-03-29T00:30:00Z",
+        "2026-03-29T01:30:00Z",
+        "2026-03-29T22:30:00Z",
+        "2026-10-25T00:30:00Z",
+        "2026-10-25T01:30:00Z",
+    ]
+    .map(codex_at);
+    harness.ingest("beta", &requests).await?;
+
+    let spring = harness
+        .get::<Series>(
+            "/api/analytics/series?bucket=hour&time_zone=Europe/Amsterdam\
+             &from=2026-03-29T00:00:00Z&to=2026-03-29T03:00:00Z",
+        )
+        .await;
+    assert_eq!(
+        requests_per_start(spring),
+        [
+            ("2026-03-29T01:00:00+01:00".to_owned(), 1),
+            ("2026-03-29T03:00:00+02:00".to_owned(), 1),
+            ("2026-03-29T04:00:00+02:00".to_owned(), 0),
+        ],
+        "the clocks skip 02:00"
+    );
+
+    let days = harness
+        .get::<Series>(
+            "/api/analytics/series?bucket=day&time_zone=Europe/Amsterdam\
+             &from=2026-03-28T23:00:00Z&to=2026-03-30T22:00:00Z",
+        )
+        .await;
+    assert_eq!(
+        requests_per_start(days),
+        [
+            ("2026-03-29T00:00:00+01:00".to_owned(), 3),
+            ("2026-03-30T00:00:00+02:00".to_owned(), 1),
+        ],
+        "22:30 UTC on the 29th is already the 30th in summer time"
+    );
+
+    let autumn = harness
+        .get::<Series>(
+            "/api/analytics/series?bucket=hour&time_zone=Europe/Amsterdam\
+             &from=2026-10-25T00:00:00Z&to=2026-10-25T02:00:00Z",
+        )
+        .await;
+    assert_eq!(
+        requests_per_start(autumn),
+        [("2026-10-25T02:00:00+02:00".to_owned(), 2)],
+        "02:00 happens twice and is one bucket"
+    );
+
+    Ok(())
+}
+
+/// Chatham moves from +12:45 to +13:45 at 14:00 UTC on 2025-09-27, so its clocks skip from
+/// 02:45 to 03:45. Troll moves from +00:00 to +02:00 at 01:00 UTC on 2025-03-30, so its
+/// clocks skip two hours.
+#[tokio::test]
+async fn a_gap_off_the_hour_or_longer_than_one_keeps_every_bucket_its_events_name()
+-> Result<(), Failure> {
+    let harness = harness().await?;
+    let requests = ["2025-09-27T14:05:00Z", "2025-03-30T01:30:00Z"].map(codex_at);
+    harness.ingest("beta", &requests).await?;
+
+    let chatham = harness
+        .get::<Series>(
+            "/api/analytics/series?bucket=hour&time_zone=Pacific/Chatham\
+             &from=2025-09-27T13:00:00Z&to=2025-09-27T15:00:00Z",
+        )
+        .await;
+    assert_eq!(
+        requests_per_start(chatham),
+        [
+            ("2025-09-28T01:00:00+12:45".to_owned(), 0),
+            ("2025-09-28T02:00:00+12:45".to_owned(), 0),
+            ("2025-09-28T03:45:00+13:45".to_owned(), 1),
+            ("2025-09-28T04:00:00+13:45".to_owned(), 0),
+        ],
+        "03:45 to 04:00 is all of the hour 03 that happens"
+    );
+
+    let troll = harness
+        .get::<Series>(
+            "/api/analytics/series?bucket=hour&time_zone=Antarctica/Troll\
+             &from=2025-03-30T00:00:00Z&to=2025-03-30T03:00:00Z",
+        )
+        .await;
+    assert_eq!(
+        requests_per_start(troll),
+        [
+            ("2025-03-30T00:00:00+00:00".to_owned(), 0),
+            ("2025-03-30T03:00:00+02:00".to_owned(), 1),
+            ("2025-03-30T04:00:00+02:00".to_owned(), 0),
+        ],
+        "the clocks skip 01:00 and 02:00, and no start repeats"
+    );
 
     Ok(())
 }
@@ -691,6 +830,55 @@ async fn groups_outside_the_top_merge_into_other() -> Result<(), Failure> {
     };
     assert_eq!(on("other", "2026-03-02T00:00:00+00:00"), Some(2));
     assert_eq!(on(&a3, "2026-03-02T00:00:00+00:00"), Some(0));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_account_or_a_source_key_carries_its_name() -> Result<(), Failure> {
+    let harness = harness().await?;
+    let accounts = harness.get::<AccountList>("/api/accounts").await.accounts;
+    let dimensions = harness
+        .get::<Dimensions>(&format!("/api/analytics/dimensions?{WEEK}"))
+        .await;
+
+    let series = harness
+        .get::<Series>(&format!(
+            "/api/analytics/series?bucket=week&group_by=account&top=2&{WEEK}"
+        ))
+        .await;
+    for bucket in &series.buckets {
+        let named = accounts
+            .iter()
+            .find(|account| account.account_id == bucket.key)
+            .and_then(|account| account.label.clone());
+        assert_eq!(bucket.label, named, "the label of {}", bucket.key);
+    }
+    assert!(
+        series
+            .buckets
+            .iter()
+            .any(|bucket| bucket.key == "other" && bucket.label.is_none())
+    );
+    assert!(series.buckets.iter().any(|bucket| bucket.label.is_some()));
+
+    let by_source = harness
+        .get::<Breakdown>(&format!("/api/analytics/breakdown?group_by=source&{WEEK}"))
+        .await;
+    assert_eq!(by_source.rows.len(), 2);
+    for row in &by_source.rows {
+        let named = dimensions
+            .sources
+            .iter()
+            .find(|source| source.source_id == row.key)
+            .map(|source| source.name.clone());
+        assert_eq!(row.label, named);
+    }
+
+    let by_model = harness
+        .get::<Breakdown>(&format!("/api/analytics/breakdown?group_by=model&{WEEK}"))
+        .await;
+    assert!(by_model.rows.iter().all(|row| row.label.is_none()));
 
     Ok(())
 }
@@ -850,7 +1038,7 @@ async fn an_id_that_names_nothing_is_refused() -> Result<(), Failure> {
         "source_id=0000000000",
         "account_id=00000000000",
         "source_id=00000000000",
-        "utc_offset_minutes=100000",
+        "time_zone=Not/A_Zone",
     ] {
         let response = harness
             .client

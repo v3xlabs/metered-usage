@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
-use jiff::tz::Offset;
+use jiff::tz::TimeZone;
 use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 use crate::analytics::AnalyticsError;
@@ -110,7 +110,7 @@ impl Health {
             ..AnalyticsFilter::window(
                 Some(buckets_start),
                 Some(Timestamp::from_second(end)?),
-                Offset::UTC,
+                TimeZone::UTC,
             )
         };
         filter.check(database).await?;

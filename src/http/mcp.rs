@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use jiff::tz::Offset;
+use jiff::tz::TimeZone;
 use poem::http::{HeaderValue, header};
 use poem::{EndpointExt, IntoEndpoint, Request};
 use poem_mcpserver::{McpServer, Tools, streamable_http, tool::StructuredContent};
@@ -140,7 +140,7 @@ struct DailyBurnOutput {
     total_tokens: i64,
 }
 
-/// `day` is `YYYY-MM-DD` at the requested offset.
+/// `day` is `YYYY-MM-DD` in the requested time zone.
 #[derive(Debug, Serialize, JsonSchema)]
 struct PeakDayOutput {
     day: String,
@@ -445,22 +445,23 @@ impl UsageTools {
     /// Summarize every metered request in a window: totals, cost, cache savings, the rate
     /// per local day and the busiest days. Both bounds are RFC 3339 and optional; `to` is
     /// exclusive and defaults to now, and `from` absent starts at the first request.
-    /// `utc_offset_minutes` places day boundaries in local time.
+    /// `time_zone`, an IANA name such as `Europe/Amsterdam` and UTC when absent, places
+    /// day boundaries in local time.
     async fn usage_summary(
         &self,
         from: Option<String>,
         to: Option<String>,
-        utc_offset_minutes: Option<i32>,
+        time_zone: Option<String>,
     ) -> Result<StructuredContent<SummaryOutput>, String> {
-        let offset = utc_offset_minutes
-            .unwrap_or(0)
-            .checked_mul(60)
-            .and_then(|seconds| Offset::from_seconds(seconds).ok())
-            .ok_or_else(|| "utc_offset_minutes is outside the supported range".to_owned())?;
+        let time_zone = match time_zone.as_deref() {
+            Some(name) => TimeZone::get(name)
+                .map_err(|_| "time_zone names no zone in the time zone database".to_owned())?,
+            None => TimeZone::UTC,
+        };
         let filter = AnalyticsFilter::window(
             instant(from.as_deref(), "from")?,
             instant(to.as_deref(), "to")?,
-            offset,
+            time_zone,
         );
         let summary = Summary::load(&self.state.database, &filter)
             .await
@@ -608,7 +609,7 @@ mod tests {
         let token = "a token".to_owned().try_into().expect("a token");
 
         Arc::new(
-            AppState::new(database, token, crate::config::Config::default())
+            AppState::new(database, token, None, crate::config::Config::default())
                 .expect("an HTTP client"),
         )
     }

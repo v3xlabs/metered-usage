@@ -89,9 +89,11 @@ impl TryFrom<String> for Token {
 }
 
 /// Answers 401 to a request that did not present the token, unless it is one of the
-/// [`OPEN`] operations.
+/// [`OPEN`] operations. The read token admits `GET` only, so a dashboard that holds it
+/// cannot change prices, plans or credentials.
 pub struct RequireCredential {
     pub token: Token,
+    pub read_token: Option<Token>,
 }
 
 impl<E: Endpoint> Middleware<E> for RequireCredential {
@@ -101,6 +103,7 @@ impl<E: Endpoint> Middleware<E> for RequireCredential {
         RequireCredentialEndpoint {
             inner,
             token: self.token.clone(),
+            read_token: self.read_token.clone(),
         }
     }
 }
@@ -108,13 +111,19 @@ impl<E: Endpoint> Middleware<E> for RequireCredential {
 pub struct RequireCredentialEndpoint<E> {
     inner: E,
     token: Token,
+    read_token: Option<Token>,
 }
 
 impl<E: Endpoint> Endpoint for RequireCredentialEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, request: Request) -> poem::Result<Self::Output> {
-        if is_open(&request) || self.token.admits(&request) {
+        let reads = request.method() == Method::GET
+            && self
+                .read_token
+                .as_ref()
+                .is_some_and(|token| token.admits(&request));
+        if is_open(&request) || reads || self.token.admits(&request) {
             return Ok(self.inner.call(request).await?.into_response());
         }
 

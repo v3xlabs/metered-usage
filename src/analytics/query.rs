@@ -7,7 +7,7 @@ use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 use crate::analytics::bucket::Bucket;
 use crate::analytics::dimension::Dimension;
-use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::filter::{AnalyticsFilter, Shift};
 use crate::analytics::metrics::{FROM, METRICS, UsageMetrics};
 use crate::database::codec::StoredTimestamp;
 
@@ -16,11 +16,12 @@ const SPAN: &str =
     ", MIN(usage_event.occurred_at) AS first_at, MAX(usage_event.occurred_at) AS last_at";
 
 /// One grouping column. Nothing here is request text: a dimension and a bucket render
-/// literals of this crate, and an expression is a literal its caller wrote.
+/// literals of this crate and bind their values, and an expression is a literal its caller
+/// wrote.
 #[derive(Debug, Clone, Copy)]
-pub enum Column {
+pub enum Column<'a> {
     Key(Dimension),
-    Bucket(Bucket),
+    Bucket(Bucket, &'a Shift),
     Expression(&'static str),
 }
 
@@ -48,7 +49,7 @@ impl AddAssign<&Self> for Aggregate {
 #[must_use]
 pub fn aggregate(
     filter: &AnalyticsFilter,
-    columns: &[(Column, &'static str)],
+    columns: &[(Column<'_>, &'static str)],
     only: Option<&'static str>,
 ) -> QueryBuilder<Sqlite> {
     let mut builder = QueryBuilder::<Sqlite>::new("SELECT ");
@@ -57,7 +58,7 @@ pub fn aggregate(
             Column::Key(dimension) => {
                 builder.push(dimension.expression());
             }
-            Column::Bucket(bucket) => bucket.push_expression(&mut builder, filter),
+            Column::Bucket(bucket, shift) => bucket.push_expression(&mut builder, shift),
             Column::Expression(expression) => {
                 builder.push(expression);
             }

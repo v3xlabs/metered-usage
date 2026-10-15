@@ -1,6 +1,6 @@
 //! What usage can be grouped by, and which values of each a window holds.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use sqlx::{FromRow, QueryBuilder, Sqlite};
 
@@ -37,9 +37,47 @@ impl Dimension {
     /// The key as the API spells it: an account or a source by its encoded id.
     pub fn key(self, stored: String) -> Result<String, DatabaseError> {
         match self {
-            Self::Account => encoded::<Account>(stored, "account_id"),
-            Self::Source => encoded::<Source>(stored, "source_id"),
+            Self::Account => stored_id::<Account>(&stored, "account_id").map(Id::encode),
+            Self::Source => stored_id::<Source>(&stored, "source_id").map(Id::encode),
             Self::Model | Self::Provider | Self::Harness | Self::Session => Ok(stored),
+        }
+    }
+
+    /// What a reader calls each stored key: an account by its display name, else its label,
+    /// and a source by its name. Keys of the other dimensions already read as names, so they
+    /// get none, and neither does an account that has neither name.
+    pub async fn labels(
+        self,
+        database: &Database,
+        stored: impl IntoIterator<Item = &str>,
+    ) -> Result<HashMap<String, String>, AnalyticsError> {
+        match self {
+            Self::Account => {
+                let ids = stored
+                    .into_iter()
+                    .map(|key| stored_id::<Account>(key, "account_id"))
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                Ok(account_summaries(database, ids)
+                    .await?
+                    .into_iter()
+                    .filter_map(|account| {
+                        let name = account.display_name.or(account.label)?;
+                        Some((account.id.raw().to_string(), name))
+                    })
+                    .collect())
+            }
+            Self::Source => {
+                let ids = stored
+                    .into_iter()
+                    .map(|key| stored_id::<Source>(key, "source_id"))
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                Ok(SourceRef::load_all(database, ids)
+                    .await?
+                    .into_iter()
+                    .map(|source| (source.id.raw().to_string(), source.name))
+                    .collect())
+            }
+            Self::Model | Self::Provider | Self::Harness | Self::Session => Ok(HashMap::new()),
         }
     }
 }
@@ -137,12 +175,12 @@ struct Combination {
     source_id: Id<Source>,
 }
 
-fn encoded<T>(stored: String, field: &'static str) -> Result<String, DatabaseError> {
+fn stored_id<T>(stored: &str, field: &'static str) -> Result<Id<T>, DatabaseError> {
     stored
         .parse::<i64>()
-        .map(|raw| Id::<T>::from_raw(raw).encode())
+        .map(Id::from_raw)
         .map_err(|_| DatabaseError::Unreadable {
             field,
-            value: stored,
+            value: stored.to_owned(),
         })
 }
