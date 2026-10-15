@@ -1,11 +1,21 @@
-import { createMemo, createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Match, onSettled, Show, Switch } from "solid-js";
 
 import type { FilterDimension } from "../../api/analytics";
 import { labelKey } from "../../domain/analytics";
 import { Chevron } from "../Control";
+import { HarnessIcon } from "../HarnessIcon";
 import { ProviderIcon } from "../ProviderIcon";
+import { DimensionIcon } from "./DimensionIcon";
 
-export type PickerOption = { value: string; label: string; provider?: string | undefined; };
+export type PickerOption = { value: string; label: string; provider?: string | undefined; harness?: string | undefined; };
+
+// Nothing for a value that names neither a harness nor a provider, such as a model.
+const OptionIcon = (properties: { option: PickerOption; }) => (
+  <Switch>
+    <Match when={properties.option.harness}>{harness => <HarnessIcon harness={harness()} class="size-3.5" />}</Match>
+    <Match when={properties.option.provider}>{provider => <ProviderIcon provider={provider()} class="size-3.5 shrink-0" title={false} />}</Match>
+  </Switch>
+);
 
 export const FilterPicker = (properties: {
   dimension: FilterDimension;
@@ -28,20 +38,21 @@ export const FilterPicker = (properties: {
           option.label.toLowerCase().includes(needle) || option.value.toLowerCase().includes(needle));
   });
 
+  const chosen = createMemo(() => {
+    const [only, ...rest] = properties.selected;
+
+    return only === undefined || rest.length > 0 ? undefined : properties.options.find(option => option.value === only);
+  });
+
+  // No choice means every value, so the chip names its dimension rather than saying "All".
   const summary = createMemo(() => {
-    const count = properties.selected.length;
+    const [only] = properties.selected;
 
-    if (count === 0) return "All";
+    if (only === undefined) return properties.label;
 
-    if (count === 1) {
-      const only = properties.selected[0];
+    if (properties.selected.length === 1) return chosen()?.label ?? labelKey(properties.dimension, only, undefined).text;
 
-      if (only === undefined) return "All";
-
-      return properties.options.find(option => option.value === only)?.label ?? labelKey(properties.dimension, only, undefined).text;
-    }
-
-    return `${count} selected`;
+    return `${properties.selected.length} selected`;
   });
 
   const toggle = (value: string, isChecked: boolean): void => {
@@ -92,8 +103,19 @@ export const FilterPicker = (properties: {
             : "bg-raised text-slate-900 hover:bg-raised-hover dark:text-slate-100",
         ]}
       >
-        <span class="text-slate-600 dark:text-slate-400">{properties.label}</span>
-        <span class="max-w-40 truncate font-medium">{summary()}</span>
+        <Show
+          when={chosen()?.harness !== undefined || chosen()?.provider !== undefined ? chosen() : undefined}
+          fallback={<DimensionIcon dimension={properties.dimension} />}
+        >
+          {option => <OptionIcon option={option()} />}
+        </Show>
+        <Show when={properties.selected.length > 0}>
+          <span class="sr-only">{`${properties.label}:`}</span>
+        </Show>
+        <span class={["max-w-40 truncate", properties.selected.length > 0 ? "font-medium" : "text-slate-700 dark:text-slate-300"]}>{summary()}</span>
+        <Show when={properties.selected.length === 0}>
+          <span class="sr-only">, all</span>
+        </Show>
         <Chevron />
       </summary>
       <div class="absolute inset-x-0 z-20 mt-1 space-y-2 rounded-panel bg-surface p-2 shadow-lg ring-1 ring-hairline sm:right-auto sm:w-72">
@@ -131,9 +153,7 @@ export const FilterPicker = (properties: {
                       onChange={event => toggle(option.value, event.currentTarget.checked)}
                       class="accent-blue-600"
                     />
-                    <Show when={option.provider}>
-                      {provider => <ProviderIcon provider={provider()} class="size-3.5 shrink-0" title={false} />}
-                    </Show>
+                    <OptionIcon option={option} />
                     <span class="truncate" title={option.label}>{option.label}</span>
                   </label>
                 </li>

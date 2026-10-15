@@ -4,6 +4,10 @@ import type { Summary } from "../api/analytics";
 import { formatCompact, formatExact, formatUsd } from "../domain/format";
 
 const PERCENT = 100;
+const GRID = "grid grid-cols-2 gap-px overflow-hidden rounded-panel bg-hairline sm:grid-cols-4 lg:grid-cols-7";
+const CELL = "bg-surface px-3 py-2.5";
+// One per cell `TotalsStrip` shows when no token is unclassified.
+const PENDING_CELLS = Array.from({ length: 13 }, (_, index) => index);
 
 export const TotalsStrip = (properties: { summary: Summary; }) => {
   const cells = createMemo(() => {
@@ -30,10 +34,10 @@ export const TotalsStrip = (properties: { summary: Summary; }) => {
   });
 
   return (
-    <dl class="grid grid-cols-2 gap-px overflow-hidden rounded-panel bg-hairline sm:grid-cols-4 lg:grid-cols-7">
+    <dl class={GRID}>
       <For each={cells()}>
         {cell => (
-          <div class="bg-surface px-3 py-2.5">
+          <div class={CELL}>
             <dt class="truncate text-xs text-slate-500 dark:text-slate-500">{cell.label}</dt>
             <dd class="text-base font-semibold text-slate-900 tabular-nums dark:text-slate-100">{cell.value}</dd>
           </div>
@@ -42,3 +46,16 @@ export const TotalsStrip = (properties: { summary: Summary; }) => {
     </dl>
   );
 };
+
+export const TotalsStripPending = () => (
+  <div role="status" aria-label="Loading totals" class={[GRID, "animate-pulse"]}>
+    <For each={PENDING_CELLS}>
+      {() => (
+        <div class={CELL}>
+          <p class="text-xs">{"\u{A0}"}</p>
+          <p class="text-base">{"\u{A0}"}</p>
+        </div>
+      )}
+    </For>
+  </div>
+);

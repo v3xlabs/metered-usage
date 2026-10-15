@@ -61,7 +61,13 @@ const AccountFilter = (properties: { accountId: string | undefined; onChoose: (a
 
   return (
     <Errored fallback={<p class="text-xs text-red-600 dark:text-red-400" role="alert">Accounts unavailable</p>}>
-      <Loading fallback={<p class="text-xs text-slate-500 dark:text-slate-500" role="status">Loading accounts</p>}>
+      <Loading
+        fallback={(
+          <div role="status" class="h-8 w-36 animate-pulse rounded-control bg-raised">
+            <span class="sr-only">Loading accounts</span>
+          </div>
+        )}
+      >
         <label for="logs-account" class="sr-only">Account</label>
         <Select
           controlId="logs-account"
@@ -189,7 +195,7 @@ export const LogsPage = () => {
         </div>
       </div>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading logs" />}>
+        <Loading fallback={<RegionPending label="Loading logs" heightPx={600} isOnCanvas />}>
           <div class="space-y-3">
             <EventsTable events={rows().events} nowMs={nowMs()} />
             <div class="flex items-center justify-between gap-3">

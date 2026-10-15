@@ -13,10 +13,11 @@ import { CompositionPanel } from "../components/analytics/CompositionPanel";
 import type { StackMode } from "../components/analytics/OverTimePanel";
 import { OverTimePanel } from "../components/analytics/OverTimePanel";
 import { PageHeading } from "../components/analytics/PageHeading";
+import { RangeChoice } from "../components/analytics/RangeChoice";
 import { SessionsPanel } from "../components/analytics/SessionsPanel";
-import { SummaryCards } from "../components/analytics/SummaryCards";
+import { SummaryCards, SummaryCardsPending } from "../components/analytics/SummaryCards";
 import { UsageToolbar } from "../components/analytics/UsageToolbar";
-import { RegionFailure, RegionPending } from "../components/Region";
+import { RegionFailure } from "../components/Region";
 import type { CostBasis, Measure, Metric, TokenKind } from "../domain/analytics";
 import { FILTER_DIMENSIONS, rankByOf, TOKEN_KINDS } from "../domain/analytics";
 
@@ -78,18 +79,21 @@ export const AnalyticsUsagePage = () => {
 
   return (
     <div class="space-y-6">
-      <PageHeading title="Usage" usageWindow={analytics.usageWindow()} />
+      <PageHeading title="Usage" usageWindow={analytics.usageWindow()}>
+        <RangeChoice
+          range={analytics.range()}
+          firstDay={analytics.usageWindow().firstDay}
+          lastDay={analytics.usageWindow().lastDay}
+          onRange={analytics.chooseRange}
+          onCustom={analytics.chooseCustom}
+        />
+      </PageHeading>
       <UsageToolbar
-        range={analytics.range()}
-        firstDay={analytics.usageWindow().firstDay}
-        lastDay={analytics.usageWindow().lastDay}
         metric={metric()}
         kinds={kinds()}
         basis={basis()}
         filters={analytics.filters()}
         dimensions={analytics.dimensions()}
-        onRange={analytics.chooseRange}
-        onCustom={analytics.chooseCustom}
         onMetric={next => setSearch({ metric: next })}
         onKinds={next => setSearch({ kinds: next.length === TOKEN_KINDS.length ? undefined : [...next] })}
         onBasis={next => setSearch({ basis: next })}
@@ -97,7 +101,7 @@ export const AnalyticsUsagePage = () => {
         onClear={analytics.clearFilters}
       />
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading summary" />}>
+        <Loading fallback={<SummaryCardsPending />}>
           <SummaryCards
             summary={summary()}
             basis={basis()}

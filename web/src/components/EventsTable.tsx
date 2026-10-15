@@ -44,12 +44,12 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
               <th scope="col" class={HEADER_CELL}>Time</th>
               <th scope="col" class={HEADER_CELL}>Model</th>
               <th scope="col" class={HEADER_CELL}>Account</th>
-              <th scope="col" class={HEADER_CELL}>Caller</th>
               <th scope="col" class={HEADER_CELL}>Harness</th>
               <th scope="col" class={[HEADER_CELL, "text-right"]}>Tokens</th>
               <th scope="col" class={[HEADER_CELL, "text-right"]}>List cost</th>
               <th scope="col" class={[HEADER_CELL, "text-right"]}>Billed</th>
               <th scope="col" class={[HEADER_CELL, "text-right"]}>Latency</th>
+              <th scope="col" class={HEADER_CELL}>Caller</th>
               <th scope="col" class={[HEADER_CELL, "text-right"]}>Status</th>
             </tr>
           </thead>
@@ -75,7 +75,6 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                   <td class={[CELL, "max-w-72"]}>
                     <AccountName account={record.account} isSourceShown={needingSource().has(record.account.account_id)} />
                   </td>
-                  <td class={[CELL, "text-slate-600 dark:text-slate-300"]}>{record.caller === undefined ? "-" : redact(record.caller)}</td>
                   <td class={[CELL, "text-slate-600 dark:text-slate-300"]} title={record.user_agent === undefined ? undefined : redact(record.user_agent)}>{record.harness ?? "-"}</td>
                   <td class={[CELL, "text-right whitespace-nowrap tabular-nums"]}>
                     <span class="text-slate-900 dark:text-slate-100">{formatExact(record.total_tokens)}</span>
@@ -105,6 +104,7 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                   <td class={[CELL, "text-right whitespace-nowrap text-slate-600 tabular-nums dark:text-slate-300"]}>
                     {formatLatency(record.latency_ms)}
                   </td>
+                  <td class={[CELL, "text-slate-600 dark:text-slate-300"]}>{record.caller === undefined ? "-" : redact(record.caller)}</td>
                   <td
                     class={[
                       CELL,

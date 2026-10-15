@@ -7,7 +7,7 @@ import { BucketChoice } from "../analytics/OverTimePanel";
 import { EmptyState, Panel, Stale } from "../analytics/Panel";
 import { Segmented } from "../analytics/Segmented";
 import type { ChartFormat } from "../charts/TimeSeriesChart";
-import { TimeSeriesChart } from "../charts/TimeSeriesChart";
+import { SERIES_CHART_PENDING_HEIGHT_PX, TimeSeriesChart } from "../charts/TimeSeriesChart";
 
 // One hue per model: the palette holds twelve before hues repeat.
 const TOP_MODELS = 12;
@@ -60,6 +60,7 @@ export const ModelTrendsPanel = (properties: {
     <Panel
       title={`${TRENDS[properties.measure].label} over time by model`}
       loadingLabel="Loading model trends"
+      pendingHeightPx={SERIES_CHART_PENDING_HEIGHT_PX}
       actions={(
         <>
           <Segmented

@@ -20,6 +20,8 @@ const RESET_SETTLE_MS = 2000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 const AGE_TEXT = "text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400";
+// One source heading over one row of two-window cards, as the cards lay out at full width.
+const QUOTA_PENDING_HEIGHT_PX = 251;
 
 type Notice = { tone: "info" | "error"; text: string; };
 
@@ -139,7 +141,8 @@ export const QuotaPanel = () => {
       <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
         <h2 id="quota-heading" class="py-1 text-sm font-semibold text-slate-700 dark:text-slate-300">Quota</h2>
         <Errored fallback={null}>
-          <Loading fallback={null}>
+          {/* The sync controls and the notice line under them, so the header keeps its height. */}
+          <Loading fallback={<div class="h-11.5" />}>
             <div class="flex flex-col items-end gap-0.5">
               <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
                 <div class="flex items-center gap-1">
@@ -178,7 +181,7 @@ export const QuotaPanel = () => {
         </Errored>
       </div>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading quota" />}>
+        <Loading fallback={<RegionPending label="Loading quota" heightPx={QUOTA_PENDING_HEIGHT_PX} isOnCanvas />}>
           <Show when={rereadFailure()}>
             {message => (
               <p role="status" class="text-sm text-amber-700 dark:text-amber-400">

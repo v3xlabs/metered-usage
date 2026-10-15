@@ -75,6 +75,7 @@ export const RequestScatterPanel = (properties: {
     <Panel
       title="Requests"
       loadingLabel="Loading requests"
+      pendingHeightPx={352}
       actions={(
         <>
           <Segmented

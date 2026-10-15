@@ -29,6 +29,9 @@ const OTHER_KEY = "other";
 const OTHER_COLOR = "#94a3b8";
 
 const DEFAULT_HEIGHT = 260;
+
+// The plot, the space-y-3 gap under it and one text-xs line of legend.
+export const SERIES_CHART_PENDING_HEIGHT_PX = DEFAULT_HEIGHT + 28;
 const INITIAL_WIDTH = 720;
 const TICK_COUNT = 4;
 const MAX_BAR_WIDTH = 56;

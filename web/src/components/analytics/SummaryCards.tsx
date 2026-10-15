@@ -18,6 +18,13 @@ const COST_CARD_LABELS: Record<TokenKind, string> = {
 const formatPercent = (ratio: number | undefined): string =>
   (ratio === undefined ? "-" : `${(ratio * PERCENT).toFixed(1)}%`);
 
+const GRID = "grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6";
+const FEATURED = "flex min-w-0 flex-col justify-between gap-2 rounded-panel bg-surface px-4 py-3 sm:col-span-2 sm:row-span-2";
+// A blank line keeps each line of a card at its loaded height while the card is pending.
+const BLANK = "\u{A0}";
+// One card per token kind's cost, then the fourteen that follow them in `SummaryCards`.
+const PENDING_CARDS: readonly Card[] = Array.from({ length: 18 }, () => ({ label: BLANK, value: BLANK, detail: BLANK }));
+
 export type Card = { label: string; value: string; detail?: string | undefined; link?: { href: string; text: string; } | undefined; };
 
 export const CardCell = (properties: { card: Card; }) => (
@@ -110,7 +117,7 @@ export const SummaryCards = (properties: {
   });
 
   const featured = (): JSX.Element => (
-    <div class="flex min-w-0 flex-col justify-between gap-2 rounded-panel bg-surface px-4 py-3 sm:col-span-2 sm:row-span-2">
+    <div class={FEATURED}>
       <dt class="text-xs text-slate-500 dark:text-slate-400">
         {properties.basis === "list"
           ? `${isAllKinds() ? "Total cost" : "Cost of selected kinds"} at list price`
@@ -130,9 +137,16 @@ export const SummaryCards = (properties: {
   );
 
   return (
-    <dl class="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+    <dl class={GRID}>
       {featured()}
       <For each={cards()}>{card => <CardCell card={card} />}</For>
     </dl>
   );
 };
+
+export const SummaryCardsPending = () => (
+  <dl role="status" aria-label="Loading summary" class={[GRID, "animate-pulse"]}>
+    <div class={FEATURED} />
+    <For each={PENDING_CARDS}>{card => <CardCell card={card} />}</For>
+  </dl>
+);

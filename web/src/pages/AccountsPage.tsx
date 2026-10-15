@@ -245,7 +245,7 @@ const DeadLetterRegion = (properties: { source: Source; }) => {
         {`Dead letters for ${redact(properties.source.name)}`}
       </h3>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading dead letters" />}>
+        <Loading fallback={<RegionPending label="Loading dead letters" heightPx={120} isOnCanvas />}>
           <DeadLetterList deadLetters={deadLetters()} />
         </Loading>
       </Errored>
@@ -263,7 +263,7 @@ const SourcesSection = () => {
     <section class="space-y-3" aria-labelledby="sources-heading">
       <h2 id="sources-heading" class="text-sm font-semibold text-slate-700 dark:text-slate-300">Sources</h2>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading sources" />}>
+        <Loading fallback={<RegionPending label="Loading sources" heightPx={252} isOnCanvas />}>
           <div class="space-y-4">
             <SourceList
               sources={sources()}
@@ -292,7 +292,7 @@ const AccountsSection = () => {
   return (
     <section aria-label="Accounts">
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
-        <Loading fallback={<RegionPending label="Loading accounts" />}>
+        <Loading fallback={<RegionPending label="Loading accounts" heightPx={755} isOnCanvas />}>
           <Show
             when={accounts().length > 0}
             fallback={<p class="rounded-panel bg-surface px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-500">No accounts seen yet.</p>}

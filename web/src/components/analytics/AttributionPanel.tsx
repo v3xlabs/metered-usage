@@ -41,6 +41,7 @@ export const AttributionPanel = (properties: {
     <Panel
       title={`${properties.measure.metric === "cost" ? "Cost" : "Token"} attribution by ${DIMENSION_LABELS[properties.dimension].toLowerCase()}`}
       loadingLabel="Loading attribution"
+      pendingHeightPx={320}
       actions={(
         <Segmented
           label="Attribution view"
