@@ -30,6 +30,8 @@ in {
         File of KEY=value lines read by systemd when the unit starts, so secrets never enter
         the Nix store. It must set METERED_USAGE_TOKEN, the shared token that protects the
         API, the MCP endpoint and the web UI, and every variable a source names in `key_env`.
+        It may set METERED_USAGE_READ_TOKEN, a second token that admits only GET requests
+        under /api, for a dashboard such as Grafana.
       '';
     };
 

@@ -253,7 +253,7 @@ async fn service(
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
     let token = Token::try_from(TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, config)?);
+    let state = Arc::new(AppState::new(database, token, None, config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
 

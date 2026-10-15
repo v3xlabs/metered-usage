@@ -109,12 +109,12 @@ const largestValue = (points: readonly SeriesPoint[], isStacked: boolean): numbe
   return Math.max(0, ...columns.values());
 };
 
+// The smallest gap between neighbouring starts, because an hour the clocks repeat is one
+// bucket twice as long.
 const bucketSpanMs = (starts: readonly string[]): number => {
-  const [first, second] = starts;
+  const times = starts.map(start => Date.parse(start));
 
-  if (first === undefined || second === undefined) return Infinity;
-
-  return Date.parse(second) - Date.parse(first);
+  return Math.min(...times.slice(1).map((time, index) => time - (times[index] ?? time)));
 };
 
 export const TimeSeriesChart = (properties: {

@@ -19,6 +19,8 @@ pub struct Breakdown {
 #[derive(Debug)]
 pub struct BreakdownRow {
     pub key: String,
+    /// See [`Dimension::labels`].
+    pub label: Option<String>,
     pub metrics: UsageMetrics,
 }
 
@@ -53,10 +55,17 @@ impl Breakdown {
                 .then_with(|| left.group_key.cmp(&right.group_key))
         });
         groups.truncate(limit);
+        let mut labels = group_by
+            .labels(
+                database,
+                groups.iter().map(|group| group.group_key.as_str()),
+            )
+            .await?;
         let rows = groups
             .into_iter()
             .map(|group| {
                 Ok(BreakdownRow {
+                    label: labels.remove(&group.group_key),
                     key: group_by.key(group.group_key)?,
                     metrics: group.aggregate.metrics,
                 })

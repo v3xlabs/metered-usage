@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use jiff::Timestamp;
-use jiff::tz::Offset;
+use jiff::tz::TimeZone;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
@@ -31,14 +31,13 @@ const DEFAULT_SESSION_LIMIT: usize = 20;
 const MAX_SESSION_LIMIT: usize = 200;
 const DEFAULT_SAMPLE_LIMIT: i64 = 4000;
 const MAX_SAMPLE_LIMIT: i64 = 20_000;
-const SECONDS_PER_MINUTE: i32 = 60;
 const DEFAULT_HEALTH_WINDOW_MINUTES: u32 = 60;
 const DEFAULT_HEALTH_BUCKET_MINUTES: u32 = 5;
 
 /// Every endpoint but `health` takes the same window and filters: `from` and `to` are
 /// RFC 3339 with `to` exclusive and defaulting to now, and `from` absent starting at the
-/// first matching event. `utc_offset_minutes` places day and week boundaries in the
-/// viewer's local time.
+/// first matching event. `time_zone`, an IANA name such as `Europe/Amsterdam` and UTC when
+/// absent, places hour, day and week boundaries in the viewer's local time.
 /// Each filter takes comma separated values, any of which may match; different filters
 /// must all match. The harness `unknown` matches events that name no harness.
 pub struct AnalyticsApi {
@@ -58,7 +57,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -68,7 +67,7 @@ impl AnalyticsApi {
         let filter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -102,7 +101,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -116,7 +115,7 @@ impl AnalyticsApi {
         let filter: AnalyticsFilter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -140,8 +139,12 @@ impl AnalyticsApi {
                 buckets: buckets
                     .into_iter()
                     .map(|bucket| SeriesBucketOutput {
-                        start: bucket.start.display_with_offset(filter.offset).to_string(),
+                        start: bucket
+                            .start
+                            .display_with_offset(filter.time_zone.to_offset(bucket.start))
+                            .to_string(),
                         key: bucket.key,
+                        label: bucket.label,
                         metrics: bucket.metrics.into(),
                     })
                     .collect(),
@@ -163,7 +166,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -176,7 +179,7 @@ impl AnalyticsApi {
         let filter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -220,7 +223,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -232,7 +235,7 @@ impl AnalyticsApi {
         let filter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -279,7 +282,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -290,7 +293,7 @@ impl AnalyticsApi {
         let filter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -331,7 +334,7 @@ impl AnalyticsApi {
         &self,
         from: Query<Option<String>>,
         to: Query<Option<String>>,
-        utc_offset_minutes: Query<Option<i32>>,
+        time_zone: Query<Option<String>>,
         #[oai(explode = false, default)] source_id: Query<Vec<String>>,
         #[oai(explode = false, default)] account_id: Query<Vec<String>>,
         #[oai(explode = false, default)] model: Query<Vec<String>>,
@@ -341,7 +344,7 @@ impl AnalyticsApi {
         let filter = match (Scope {
             from: from.0,
             to: to.0,
-            utc_offset_minutes: utc_offset_minutes.0,
+            time_zone: time_zone.0,
             source_id: source_id.0,
             account_id: account_id.0,
             model: model.0,
@@ -416,7 +419,7 @@ impl AnalyticsApi {
 struct Scope {
     from: Option<String>,
     to: Option<String>,
-    utc_offset_minutes: Option<i32>,
+    time_zone: Option<String>,
     source_id: Vec<String>,
     account_id: Vec<String>,
     model: Vec<String>,
@@ -428,12 +431,11 @@ impl TryFrom<Scope> for AnalyticsFilter {
     type Error = Error;
 
     fn try_from(scope: Scope) -> Result<Self, Self::Error> {
-        let offset = scope
-            .utc_offset_minutes
-            .unwrap_or(0)
-            .checked_mul(SECONDS_PER_MINUTE)
-            .and_then(|seconds| Offset::from_seconds(seconds).ok())
-            .ok_or_else(|| message("utc_offset_minutes is outside the supported range"))?;
+        let time_zone = match scope.time_zone.as_deref() {
+            Some(name) => TimeZone::get(name)
+                .map_err(|_| message("time_zone names no zone in the time zone database"))?,
+            None => TimeZone::UTC,
+        };
 
         Ok(Self {
             source_ids: ids(scope.source_id, "source_id must be source ids")?,
@@ -444,7 +446,7 @@ impl TryFrom<Scope> for AnalyticsFilter {
             ..Self::window(
                 instant(scope.from.as_deref(), "from")?,
                 instant(scope.to.as_deref(), "to")?,
-                offset,
+                time_zone,
             )
         })
     }
@@ -677,11 +679,14 @@ struct SeriesOutput {
 }
 
 #[derive(Debug, Object)]
-#[oai(rename = "SeriesBucket")]
+#[oai(rename = "SeriesBucket", skip_serializing_if_is_none)]
 struct SeriesBucketOutput {
     /// RFC 3339 at the viewer's offset.
     start: String,
     key: String,
+    /// What an account or a source keyed here is called: an account's display name or
+    /// label, a source's name. Absent for every other key.
+    label: Option<String>,
     metrics: UsageMetricsOutput,
 }
 
@@ -708,9 +713,12 @@ impl From<Breakdown> for BreakdownOutput {
 
 /// An account or a source is keyed by its id; an absent harness or session by `unknown`.
 #[derive(Debug, Object)]
-#[oai(rename = "BreakdownRow")]
+#[oai(rename = "BreakdownRow", skip_serializing_if_is_none)]
 struct BreakdownRowOutput {
     key: String,
+    /// What an account or a source keyed here is called: an account's display name or
+    /// label, a source's name. Absent for every other key.
+    label: Option<String>,
     metrics: UsageMetricsOutput,
 }
 
@@ -718,6 +726,7 @@ impl From<BreakdownRow> for BreakdownRowOutput {
     fn from(row: BreakdownRow) -> Self {
         Self {
             key: row.key,
+            label: row.label,
             metrics: row.metrics.into(),
         }
     }

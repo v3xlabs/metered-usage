@@ -236,7 +236,7 @@ async fn state(kind: &str, base_url: &str, secret: &str) -> Result<Arc<AppState>
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
     let token = Token::try_from(TOKEN.to_owned())?;
-    Ok(Arc::new(AppState::new(database, token, config)?))
+    Ok(Arc::new(AppState::new(database, token, None, config)?))
 }
 
 async fn collecting(proxy: &Proxy, secret: &str) -> Result<Arc<AppState>, Failure> {

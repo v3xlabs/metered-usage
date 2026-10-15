@@ -599,6 +599,11 @@ export interface components {
          */
         BreakdownRow: {
             key: string;
+            /**
+             * @description What an account or a source keyed here is called: an account's display name or
+             *     label, a source's name. Absent for every other key.
+             */
+            label?: string;
             metrics: components["schemas"]["UsageMetrics"];
         };
         /**
@@ -1030,6 +1035,11 @@ export interface components {
             /** @description RFC 3339 at the viewer's offset. */
             start: string;
             key: string;
+            /**
+             * @description What an account or a source keyed here is called: an account's display name or
+             *     label, a source's name. Absent for every other key.
+             */
+            label?: string;
             metrics: components["schemas"]["UsageMetrics"];
         };
         /** SessionInput */
@@ -1628,7 +1638,7 @@ export interface operations {
             query?: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
@@ -1672,7 +1682,7 @@ export interface operations {
             query: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
@@ -1720,7 +1730,7 @@ export interface operations {
             query: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
@@ -1767,7 +1777,7 @@ export interface operations {
             query?: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
@@ -1813,7 +1823,7 @@ export interface operations {
             query?: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
@@ -1858,7 +1868,7 @@ export interface operations {
             query?: {
                 from?: string;
                 to?: string;
-                utc_offset_minutes?: number;
+                time_zone?: string;
                 source_id?: string[];
                 account_id?: string[];
                 model?: string[];
