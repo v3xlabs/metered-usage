@@ -8,7 +8,12 @@ import { accountBuckets, bucketText, healthSummary, healthTone } from "../domain
 
 const REFETCH_INTERVAL_MS = 60_000;
 
-const SQUARE = "size-2.5 shrink-0 rounded-[3px]";
+export type HealthStripShape = "squares" | "pills";
+
+const MARK_SHAPES: Record<HealthStripShape, string> = {
+  squares: "size-2.5 shrink-0 rounded-[3px]",
+  pills: "h-3 w-[3px] shrink-0 rounded-[1.5px]",
+};
 
 const TONE_CLASSES: Record<HealthTone, string> = {
   empty: "bg-slate-200 dark:bg-slate-700",
@@ -37,37 +42,38 @@ export const createAccountHealth = () => {
   return strip;
 };
 
-const Squares = (properties: { buckets: readonly HealthBucket[]; bucketMinutes: number; }) => (
-  <div role="img" aria-label={`Last hour: ${healthSummary(properties.buckets)}`} class="flex gap-0.5">
+const Marks = (properties: { buckets: readonly HealthBucket[]; bucketMinutes: number; shape: HealthStripShape; }) => (
+  <div role="img" aria-label={`Last hour: ${healthSummary(properties.buckets)}`} class="flex shrink-0 gap-0.5">
     <For each={properties.buckets}>
-      {bucket => <span title={bucketText(bucket, properties.bucketMinutes)} class={[SQUARE, TONE_CLASSES[healthTone(bucket)]]} />}
+      {bucket => <span title={bucketText(bucket, properties.bucketMinutes)} class={[MARK_SHAPES[properties.shape], TONE_CLASSES[healthTone(bucket)]]} />}
     </For>
   </div>
 );
 
 const PLACEHOLDER = Array.from({ length: HEALTH_WINDOW_MINUTES / HEALTH_BUCKET_MINUTES }, (_, index) => index);
 
-const Placeholder = () => (
-  <div role="img" aria-label="Loading request history" class="flex animate-pulse gap-0.5">
+const Placeholder = (properties: { shape: HealthStripShape; }) => (
+  <div role="img" aria-label="Loading request history" class="flex shrink-0 animate-pulse gap-0.5">
     <For each={PLACEHOLDER}>
-      {() => <span class={[SQUARE, TONE_CLASSES.empty]} />}
+      {() => <span class={[MARK_SHAPES[properties.shape], TONE_CLASSES.empty]} />}
     </For>
   </div>
 );
 
-export const HealthStrip = (properties: { accountId: string; strip: Accessor<AccountHealthStrip>; }) => (
+export const HealthStrip = (properties: { accountId: string; strip: Accessor<AccountHealthStrip>; shape: HealthStripShape; }) => (
   <Errored
     fallback={(_, reset) => (
       <p class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-        Request history unavailable
+        <span class={{ "sr-only": properties.shape === "pills" }}>Request history unavailable</span>
         <button type="button" onClick={reset} class="underline underline-offset-2 hover:text-slate-900 dark:hover:text-slate-100">Retry</button>
       </p>
     )}
   >
-    <Loading fallback={<Placeholder />}>
-      <Squares
+    <Loading fallback={<Placeholder shape={properties.shape} />}>
+      <Marks
         buckets={accountBuckets(properties.strip(), properties.accountId, HEALTH_WINDOW_MINUTES)}
         bucketMinutes={properties.strip().bucket_minutes}
+        shape={properties.shape}
       />
     </Loading>
   </Errored>

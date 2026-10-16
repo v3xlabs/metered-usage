@@ -221,7 +221,7 @@ const AccountRow = (properties: {
         </Show>
       </dl>
     </div>
-    <HealthStrip accountId={properties.account.account_id} strip={properties.health} />
+    <HealthStrip accountId={properties.account.account_id} strip={properties.health} shape="squares" />
     <div class="text-right">
       <p class="text-sm text-slate-900 tabular-nums dark:text-slate-100">{formatExact(properties.account.event_count)}</p>
       <p class="text-xs text-slate-500 dark:text-slate-500">events</p>

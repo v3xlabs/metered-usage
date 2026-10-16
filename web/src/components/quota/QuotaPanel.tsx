@@ -1,13 +1,18 @@
 import { TbOutlineCloudDownload, TbOutlineRefresh } from "solid-icons/tb";
-import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanup, refresh, Show } from "solid-js";
 
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
+import { createUsageStream } from "../../api/usageStream";
 import { groupBySource, isRetired } from "../../domain/account";
 import { redact } from "../../domain/privacy";
 import { byLastUse, formatAge, latestMoment } from "../../domain/quota";
+import type { RequestArrival, RequestEffect } from "../../domain/requestEffect";
+import { chooseRequestEffect, requestEffect } from "../../domain/requestEffect";
+import { Segmented } from "../analytics/Segmented";
 import { createAccountHealth } from "../HealthStrip";
 import { IconButton } from "../IconButton";
+import { providerBrandColor } from "../ProviderIcon";
 import { RegionFailure, RegionPending } from "../Region";
 import { QuotaCard } from "./QuotaCard";
 
@@ -18,6 +23,14 @@ const CLOCK_INTERVAL_MS = 1000;
 // The reset has to have passed on the server's clock too before the re-read can see it.
 const RESET_SETTLE_MS = 2000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+// A burst of requests, and the priced update that follows each one, share one re-read.
+const STREAM_REREAD_DELAY_MS = 2000;
+
+const EFFECT_OPTIONS: readonly { value: RequestEffect; label: string; }[] = [
+  { value: "trace", label: "Border trace" },
+  { value: "glow", label: "Edge glow" },
+  { value: "drain", label: "Bar drain" },
+];
 
 const AGE_TEXT = "text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400";
 // One source heading over one row of two-window cards, as the cards lay out at full width.
@@ -118,6 +131,33 @@ export const QuotaPanel = () => {
 
   const clock = setInterval(() => setNowMs(Date.now()), CLOCK_INTERVAL_MS);
   const rereadTimer = setInterval(() => void reread(), REREAD_INTERVAL_MS);
+  const [arrival, setArrival] = createSignal<RequestArrival | undefined>();
+  let streamReread: number | undefined;
+
+  // A metered request moves the estimates and the request history, both read from the database.
+  const scheduleStreamReread = (): void => {
+    if (streamReread !== undefined) return;
+
+    streamReread = setTimeout(() => {
+      streamReread = undefined;
+      void reread();
+      refresh(health);
+    }, STREAM_REREAD_DELAY_MS);
+  };
+
+  createUsageStream({
+    onUsage: (event) => {
+      setArrival({
+        accountId: event.account.account_id,
+        brand: providerBrandColor(event.account.provider),
+        effect: requestEffect(),
+        isFailed: event.failed,
+      });
+      scheduleStreamReread();
+    },
+    onPriced: scheduleStreamReread,
+    onResync: scheduleStreamReread,
+  });
 
   // So a window that resets shows its prediction at once rather than at the next re-read.
   createEffect(
@@ -134,6 +174,7 @@ export const QuotaPanel = () => {
   onCleanup(() => {
     clearInterval(clock);
     clearInterval(rereadTimer);
+    clearTimeout(streamReread);
   });
 
   return (
@@ -145,6 +186,15 @@ export const QuotaPanel = () => {
           <Loading fallback={<div class="h-11.5" />}>
             <div class="flex flex-col items-end gap-0.5">
               <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
+                <div class="flex items-center gap-2">
+                  <span class={AGE_TEXT}>Request effect</span>
+                  <Segmented
+                    label="Request effect"
+                    value={requestEffect()}
+                    options={EFFECT_OPTIONS}
+                    onChoose={chooseRequestEffect}
+                  />
+                </div>
                 <div class="flex items-center gap-1">
                   <span class={AGE_TEXT}>{`Soft data ${formatAge(latest().soft, nowMs())}`}</span>
                   <IconButton
@@ -200,21 +250,23 @@ export const QuotaPanel = () => {
             )}
           >
             <div class="space-y-4">
-              <For each={groupBySource(current(), entry => entry.account)}>
+              <For each={groupBySource(current(), entry => entry.account)} keyed={group => group.sourceId}>
                 {group => (
-                  <section class="space-y-2" aria-label={`Quota for ${redact(group.sourceName)}`}>
-                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group.sourceName)}</h3>
+                  <section class="space-y-2" aria-label={`Quota for ${redact(group().sourceName)}`}>
+                    <h3 class="text-xs font-medium tracking-wide text-slate-500 uppercase dark:text-slate-500">{redact(group().sourceName)}</h3>
                     <ul class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      <For each={group.entries}>
+                      {/* Keyed by account, so a re-read keeps each card and its running animation. */}
+                      <For each={group().entries} keyed={entry => entry.account.account_id}>
                         {entry => (
                           <QuotaCard
-                            entry={entry}
+                            entry={entry()}
                             nowMs={nowMs()}
                             latestSoft={latest().soft}
                             latestHard={latest().hard}
                             isRefreshBlocked={isRefreshingAll()}
                             onAccounts={setAccounts}
                             health={health}
+                            arrival={arrival()}
                           />
                         )}
                       </For>

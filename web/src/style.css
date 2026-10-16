@@ -72,3 +72,41 @@ body {
     cursor: not-allowed;
   }
 }
+
+/* The Web Animations API interpolates a custom property only once it is registered. */
+@property --quota-sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@utility quota-trace {
+  padding: 1.5px;
+  background: conic-gradient(from var(--quota-sweep), transparent 0deg 250deg, var(--brand) 340deg, transparent 360deg);
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+
+@utility quota-refill {
+  background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.45), transparent);
+  background-repeat: no-repeat;
+  background-size: 30% 100%;
+  background-position: -40% 0;
+
+  @media (prefers-reduced-motion: no-preference) {
+    animation: quota-refill-drift 2.8s linear infinite;
+  }
+}
+
+@utility quota-blocking {
+  background-image: repeating-linear-gradient(-45deg, rgb(245 158 11 / 0.32) 0 3px, transparent 3px 6px);
+}
+
+@keyframes quota-refill-drift {
+  from {
+    background-position: -40% 0;
+  }
+
+  to {
+    background-position: 140% 0;
+  }
+}
