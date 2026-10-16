@@ -191,10 +191,15 @@ impl TryFrom<CliProxyRecord> for NewUsageEvent {
             .filter(|product| !product.is_empty())
             .map(str::to_owned);
 
+        // CLIProxy names the client's own key as the source of an OAuth credential with no
+        // email. Any other source is masked, so only an OAuth source needs the check.
+        let source = record.source.filter(|source| {
+            auth_kind != AuthKind::OAuth || record.api_key.as_ref() != Some(source)
+        });
         let account = NewAccount::new(
             record.auth_index.unwrap_or_default(),
             auth_kind,
-            record.source.as_deref(),
+            source.as_deref(),
         );
 
         Ok(Self {
@@ -339,7 +344,7 @@ impl Semantics {
 
 /// Reads one record as the gateway sent it. A record that cannot be read is rejected with
 /// the fields that can carry a credential removed: the client key, the response headers,
-/// and the credential source unless it is an OAuth login.
+/// and the credential source unless it is an OAuth login other than the client key.
 #[must_use]
 pub fn parse(value: Value) -> Incoming {
     let read = CliProxyRecord::deserialize(&value)
@@ -356,13 +361,13 @@ pub fn parse(value: Value) -> Incoming {
 
 fn stripped(mut value: Value) -> Value {
     if let Value::Object(fields) = &mut value {
-        fields.remove("api_key");
+        let api_key = fields.remove("api_key");
         fields.remove("response_headers");
         let oauth = fields
             .get("auth_type")
             .and_then(Value::as_str)
             .is_some_and(|auth_type| auth_kind(Some(auth_type)) == AuthKind::OAuth);
-        if !oauth {
+        if !oauth || fields.get("source") == api_key.as_ref() {
             fields.remove("source");
         }
     }

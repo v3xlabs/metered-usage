@@ -1,9 +1,11 @@
 //! The two costs an event carries: its tokens at list rates, and what was billed for it.
 
 use jiff::Timestamp;
+use serde_json::Value;
 use sqlx::SqliteConnection;
 
 use crate::app::AppState;
+use crate::config::PricingConfig;
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::price::ModelPrice;
@@ -15,9 +17,13 @@ use crate::usage::{PricedEvent, UsageUpdate};
 /// The provider condition applies to manual rows only: gateways and LiteLLM name
 /// providers differently (`claude` against `anthropic`), and a map key names one model.
 /// LiteLLM keys some models only under their provider (`meta/muse-wonder-1.0`), so such a
-/// key also prices the bare name when the gateway names that same provider. A bare key
-/// still wins, because the exact name ranks first.
-const FILL: &str = "WITH ranked AS ( \
+/// key also prices the bare name when the gateway names that same provider. `?1` is the
+/// config's `priced_as` as a JSON object, which names the key for a model the map knows
+/// only under another name (`kimi-k3-256k` as `moonshot/kimi-k3`). A bare key still wins,
+/// because the exact name ranks first.
+const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model \
+         FROM json_each(?1)), \
+     ranked AS ( \
      SELECT event.event_id, price.price_id, ROW_NUMBER() OVER ( \
          PARTITION BY event.event_id \
          ORDER BY price.model = event.model DESC, \
@@ -28,8 +34,10 @@ const FILL: &str = "WITH ranked AS ( \
              price.effective_from DESC, \
              price.price_id DESC) AS preference \
      FROM usage_event AS event \
+     LEFT JOIN priced_as ON priced_as.model = event.model \
      JOIN model_price AS price \
          ON (price.model = event.model OR price.model = event.model_alias \
+             OR price.model = priced_as.price_model \
              OR (price.model = event.provider || '/' || event.model \
                  AND price.provider = event.provider)) \
          AND (price.origin <> 'manual' OR price.provider IS NULL \
@@ -64,7 +72,7 @@ impl ModelPrice {
     /// once that is committed.
     pub async fn fill(state: &AppState) -> Result<usize, DatabaseError> {
         let mut transaction = state.database.write().await?;
-        let priced = fill(&mut transaction).await?;
+        let priced = fill(&mut transaction, &state.config.pricing).await?;
         transaction.commit().await?;
         let count = priced.len();
         publish(state, priced);
@@ -92,7 +100,7 @@ impl ModelPrice {
         .execute(&mut *transaction)
         .await?
         .rows_affected();
-        let priced = fill(&mut transaction).await?;
+        let priced = fill(&mut transaction, &state.config.pricing).await?;
         transaction.commit().await?;
         publish(state, priced);
 
@@ -100,8 +108,17 @@ impl ModelPrice {
     }
 }
 
-async fn fill(connection: &mut SqliteConnection) -> Result<Vec<PricedEvent>, DatabaseError> {
+async fn fill(
+    connection: &mut SqliteConnection,
+    pricing: &PricingConfig,
+) -> Result<Vec<PricedEvent>, DatabaseError> {
+    let priced_as = pricing
+        .priced_as
+        .iter()
+        .map(|(model, key)| (model, key.as_str()))
+        .collect::<Value>();
     Ok(sqlx::query_as::<_, PricedEvent>(FILL)
+        .bind(priced_as.to_string())
         .fetch_all(connection)
         .await?)
 }

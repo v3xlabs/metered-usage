@@ -7,6 +7,7 @@ use crate::app::AppState;
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::id::Id;
+use crate::quota;
 use crate::source::Source;
 use crate::usage::dead_letter::DeadLetter;
 use crate::usage::{NewUsageEvent, UsageEvent, UsageUpdate};
@@ -82,7 +83,9 @@ impl NewUsageEvent {
 
 /// Stores a batch in one transaction, so a batch lands whole or not at all. A record the
 /// source already delivered is a duplicate, and a rejected one is kept as a dead letter.
-/// Committed events are then published to live subscribers.
+/// A credential the source had not reported before has its gateway's credential list read
+/// before the events are published, since only that list says which provider it belongs to
+/// and what it is called. Committed events are then published to live subscribers.
 pub async fn ingest(
     state: &AppState,
     source_id: Id<Source>,
@@ -92,6 +95,7 @@ pub async fn ingest(
     let received_at = Timestamp::now();
     let mut report = IngestReport::default();
     let mut stored = Vec::with_capacity(records.len());
+    let mut is_new_credential = false;
     let mut transaction = database.write().await?;
     for record in records {
         let event = match record {
@@ -111,15 +115,17 @@ pub async fn ingest(
                 continue;
             }
         };
+        let candidate = database.ids.next();
         let account_id = Account::resolve(
             &mut transaction,
-            database.ids.next(),
+            candidate,
             source_id,
             &event.provider,
             &event.account,
             event.occurred_at,
         )
         .await?;
+        is_new_credential |= account_id == candidate && !event.account.upstream_key.is_empty();
         let id = database.ids.next::<UsageEvent>();
         let inserted = sqlx::query(INSERT)
             .bind(id)
@@ -163,6 +169,9 @@ pub async fn ingest(
         }
     }
     transaction.commit().await?;
+    if is_new_credential {
+        quota::sync_logged(state, Some(source_id)).await;
+    }
     publish(state, &stored).await;
 
     Ok(report)

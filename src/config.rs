@@ -2,6 +2,7 @@
 //! from. Secrets are never written in it: a source names the environment variable that holds
 //! its key, and the key is read once, at load, so a missing variable stops startup.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
@@ -38,6 +39,9 @@ pub struct PricingConfig {
     pub litellm_source: Option<String>,
     pub public_map_url: String,
     pub refresh_hours: u64,
+    /// A model the gateway names, to the price map key that prices it, for a model the map
+    /// knows only under another name.
+    pub priced_as: BTreeMap<String, String>,
 }
 
 impl Default for PricingConfig {
@@ -46,6 +50,7 @@ impl Default for PricingConfig {
             litellm_source: None,
             public_map_url: PUBLIC_PRICE_MAP_URL.to_owned(),
             refresh_hours: DEFAULT_PRICE_REFRESH_HOURS,
+            priced_as: BTreeMap::new(),
         }
     }
 }
@@ -146,6 +151,7 @@ impl Config {
                     .public_map_url
                     .unwrap_or_else(|| PUBLIC_PRICE_MAP_URL.to_owned()),
                 refresh_hours: pricing.refresh_hours.unwrap_or(DEFAULT_PRICE_REFRESH_HOURS),
+                priced_as: pricing.priced_as,
             },
         })
     }
@@ -180,6 +186,8 @@ struct PricingFile {
     litellm_source: Option<String>,
     public_map_url: Option<String>,
     refresh_hours: Option<u64>,
+    #[serde(default)]
+    priced_as: BTreeMap<String, String>,
 }
 
 #[cfg(test)]

@@ -254,6 +254,9 @@ async fn harness() -> Result<Harness<impl Endpoint>, Failure> {
             [pricing]
             litellm_source = "lite"
             public_map_url = "http://{address}/map.json"
+
+            [pricing.priced_as]
+            "kimi-k3-256k" = "moonshot/kimi-k3"
             "#
         ),
         |_| Some("a-secret-that-is-long".to_owned()),
@@ -530,6 +533,37 @@ async fn a_key_litellm_names_only_under_its_provider_prices_the_bare_model() -> 
         None,
         "another provider's request is not priced from the meta key"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_model_the_map_knows_by_another_name_is_priced_as_configured() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.maps.public.lock().await["moonshot/kimi-k3"] = json!({
+        "litellm_provider": "moonshot",
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 4e-06,
+    });
+    harness.sync().await?;
+    let kimi = |upstream_id: &str, model: &str| {
+        let mut event = request(upstream_id, at("2025-06-01T00:00:00Z")?, 1000, 1000);
+        model.clone_into(&mut event.model);
+        Ok::<_, Failure>(event)
+    };
+    harness
+        .store(
+            "proxy",
+            vec![
+                kimi("mapped", "kimi-k3-256k")?,
+                kimi("unmapped", "kimi-k3-128k")?,
+            ],
+        )
+        .await?;
+    harness.fill().await?;
+
+    close(harness.cost("mapped").await?.list_cost_usd, 0.005);
+    assert_eq!(harness.cost("unmapped").await?.price_id, None);
 
     Ok(())
 }

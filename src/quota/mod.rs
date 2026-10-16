@@ -87,16 +87,21 @@ pub fn spawn(state: Arc<AppState>) {
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            match sync(&state, &state.http, None).await {
-                Ok(failures) => {
-                    for failure in failures {
-                        tracing::warn!(source = %failure.source, error = %failure.error, "soft sync failed");
-                    }
-                }
-                Err(error) => tracing::error!(%error, "soft sync could not be stored"),
-            }
+            sync_logged(&state, None).await;
         }
     });
+}
+
+/// [`sync`] for a caller that has no one to answer, so failures are logged.
+pub async fn sync_logged(state: &AppState, only: Option<Id<Source>>) {
+    match sync(state, &state.http, only).await {
+        Ok(failures) => {
+            for failure in failures {
+                tracing::warn!(source = %failure.source, error = %failure.error, "soft sync failed");
+            }
+        }
+        Err(error) => tracing::error!(%error, "soft sync could not be stored"),
+    }
 }
 
 /// Reads the credential list of every enabled CLIProxy source, or of `only`, and stores

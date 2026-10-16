@@ -98,7 +98,9 @@ impl Account {
 
     /// Finds the account a record was charged to, creating it the first time the source
     /// reports it, and widens the window it was seen in to cover `seen_at`. A merged
-    /// account answers the account that absorbed it, whose window widens instead.
+    /// account answers the account that absorbed it, whose window widens instead. A known
+    /// account keeps its provider: a record names the executor that served it, which for a
+    /// Kimi credential reached through the Claude API is `claude`.
     pub async fn resolve(
         connection: &mut SqliteConnection,
         candidate: Id<Account>,
@@ -114,7 +116,6 @@ impl Account {
             "INSERT INTO account (account_id, source_id, provider, upstream_key, auth_kind, \
              label, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
              ON CONFLICT (source_id, upstream_key) DO UPDATE SET \
-             provider = excluded.provider, \
              auth_kind = excluded.auth_kind, \
              label = COALESCE(excluded.label, account.label), \
              first_seen_at = MIN(account.first_seen_at, excluded.first_seen_at), \

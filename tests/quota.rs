@@ -400,6 +400,55 @@ async fn only_a_complete_listing_marks_a_credential_removed_and_listing_it_again
     assert!(removed(&sync(&["no-index.json"]).await).is_empty());
 }
 
+/// CLIProxy serves a Kimi credential asked through the Claude API with its Claude executor,
+/// and names the client's key as the source of a credential with no email. The first
+/// record of a credential comes before any credential list has named it.
+#[tokio::test]
+async fn a_record_keeps_the_provider_and_label_the_credential_list_names() {
+    let calls = Calls::default();
+    let (client, _state) = service(&calls).await.expect("a service");
+    let sources = client.get("/api/sources").send().await;
+    sources.assert_status_is_ok();
+    let sources = sources.json().await.value().deserialize::<Value>();
+    let source_id = sources["sources"][0]["source_id"]
+        .as_str()
+        .expect("a source id");
+    let post = |request_id: &str| {
+        let mut record = serde_json::from_str::<Value>(include_str!("fixtures/claude.json"))
+            .expect("a reference record");
+        record["auth_index"] = json!("a4");
+        record["request_id"] = json!(request_id);
+        record["source"] = json!("client-key-0123456789");
+        record["api_key"] = json!("client-key-0123456789");
+        client
+            .post(format!("/api/sources/{source_id}/events"))
+            .body_json(&json!({ "records": [record] }))
+            .send()
+    };
+    let charged = || async {
+        let accounts = client.get("/api/accounts").send().await;
+        accounts.assert_status_is_ok();
+        let accounts = accounts.json().await.value().deserialize::<Value>();
+        accounts["accounts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|account| account["event_count"].as_i64() > Some(0))
+            .cloned()
+            .expect("the account the records were charged to")
+    };
+
+    for request_id in ["first", "second"] {
+        post(request_id).await.assert_status_is_ok();
+        let kimi = charged().await;
+        assert_eq!(kimi["provider"], "kimi", "after the {request_id} record");
+        assert_eq!(
+            kimi["label"], "kim@example.com",
+            "after the {request_id} record"
+        );
+    }
+}
+
 #[tokio::test]
 async fn hard_refresh_stores_used_fractions_and_isolates_a_failing_credential() {
     let calls = Calls::default();

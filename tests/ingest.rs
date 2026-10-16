@@ -426,6 +426,32 @@ async fn an_api_key_is_never_shown() {
 }
 
 #[tokio::test]
+async fn an_oauth_credential_without_an_email_is_not_named_by_the_client_key() {
+    let gateway = gateway().await.expect("a gateway");
+    let mut unnamed = record(CLAUDE, "kimi-1").expect("a reference record");
+    unnamed["source"] = json!(API_KEY);
+    unnamed["api_key"] = json!(API_KEY);
+    let mut malformed = unnamed.clone();
+    malformed["timestamp"] = json!("yesterday");
+    let ingested = post_batch(
+        &gateway.client,
+        &gateway.source_id,
+        &json!({ "records": [unnamed, malformed] }),
+    )
+    .await;
+    assert_eq!(ingested.accepted, 1);
+    assert_eq!(ingested.rejected, 1);
+
+    for path in ["/api/accounts", "/api/usage/events", "/api/dead-letters"] {
+        let body = body_of(&gateway.client, path).await.expect("a body");
+        assert!(!body.contains(API_KEY), "{path}: {body}");
+    }
+    let accounts = accounts(&gateway.client).await;
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].label, None);
+}
+
+#[tokio::test]
 async fn two_requests_that_share_a_request_id_are_two_events() {
     let gateway = gateway().await.expect("a gateway");
     let mut first = record(ANTIGRAVITY, "antigravity-1").expect("a reference record");
