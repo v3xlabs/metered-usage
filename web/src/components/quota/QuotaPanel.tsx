@@ -7,14 +7,14 @@ import { createUsageStream } from "../../api/usageStream";
 import { groupBySource, isRetired } from "../../domain/account";
 import { redact } from "../../domain/privacy";
 import { byLastUse, formatAge, latestMoment } from "../../domain/quota";
-import type { RequestArrival, RequestEffect } from "../../domain/requestEffect";
-import { chooseRequestEffect, requestEffect } from "../../domain/requestEffect";
-import { Segmented } from "../analytics/Segmented";
+import type { RequestArrival } from "../../domain/requestEffect";
+import { requestEffect } from "../../domain/requestEffect";
 import { createAccountHealth } from "../HealthStrip";
 import { IconButton } from "../IconButton";
 import { providerBrandColor } from "../ProviderIcon";
 import { RegionFailure, RegionPending } from "../Region";
 import { QuotaCard } from "./QuotaCard";
+import { RequestEffectChoice } from "./RequestEffectChoice";
 
 // The server soft-syncs CLIProxy every three minutes, so this re-read only ever touches
 // the database and never reaches a provider.
@@ -25,12 +25,6 @@ const RESET_SETTLE_MS = 2000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 // A burst of requests, and the priced update that follows each one, share one re-read.
 const STREAM_REREAD_DELAY_MS = 2000;
-
-const EFFECT_OPTIONS: readonly { value: RequestEffect; label: string; }[] = [
-  { value: "trace", label: "Border trace" },
-  { value: "glow", label: "Edge glow" },
-  { value: "drain", label: "Bar drain" },
-];
 
 const AGE_TEXT = "text-xs whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400";
 // One source heading over one row of two-window cards, as the cards lay out at full width.
@@ -186,15 +180,7 @@ export const QuotaPanel = () => {
           <Loading fallback={<div class="h-11.5" />}>
             <div class="flex flex-col items-end gap-0.5">
               <div class="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
-                <div class="flex items-center gap-2">
-                  <span class={AGE_TEXT}>Request effect</span>
-                  <Segmented
-                    label="Request effect"
-                    value={requestEffect()}
-                    options={EFFECT_OPTIONS}
-                    onChoose={chooseRequestEffect}
-                  />
-                </div>
+                <RequestEffectChoice />
                 <div class="flex items-center gap-1">
                   <span class={AGE_TEXT}>{`Soft data ${formatAge(latest().soft, nowMs())}`}</span>
                   <IconButton
