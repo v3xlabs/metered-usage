@@ -82,6 +82,7 @@ pub async fn fetch(
                 return Ok(Observation {
                     windows,
                     plan: None,
+                    ..Observation::default()
                 });
             }
             RefreshError::Empty
@@ -123,6 +124,7 @@ async fn paid(management: &Management<'_>, auth_index: &str) -> Result<Observati
     Ok(Observation {
         windows: Vec::new(),
         plan: Some(PAID_PREFIX.to_owned()),
+        ..Observation::default()
     })
 }
 

@@ -1,18 +1,26 @@
-//! Codex: `wham/usage`. The UI's other calls fetch the subscription end date and the count
-//! of rate-limit reset credits, which have no place in a quota window, so they are not
-//! sent. The credit-consuming reset is never sent.
-
 use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::quota::management::{ApiCall, AuthFile, Management};
 use crate::quota::provider::{
-    Observation, RefreshError, after_seconds, answer, entry_records, field, instant, integer,
-    number, slug, text, used_from_percent,
+    ManualResets, Observation, RefreshError, after_seconds, answer, entry_records, field, instant,
+    integer, number, slug, text, used_from_percent,
 };
 use crate::quota::window::NewWindow;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+const CONSUME_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+/// The one kind of reset credit that resets the Codex rate limits; the UI offers no other.
+const RATE_LIMIT_RESET: &str = "codex_rate_limits";
+/// The keys the UI requires one of before it reads a reset list at all.
+const RESET_LIST_KEYS: [&str; 5] = [
+    "credits",
+    "available_count",
+    "availableCount",
+    "applicable_available_count",
+    "applicableAvailableCount",
+];
 const USER_AGENT: &str =
     "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)";
 const FIVE_HOURS: i64 = 18_000;
@@ -25,14 +33,7 @@ pub async fn fetch(
     file: &AuthFile,
     auth_index: &str,
 ) -> Result<Observation, RefreshError> {
-    let mut header = vec![
-        ("Authorization", "Bearer $TOKEN$".to_owned()),
-        ("Content-Type", "application/json".to_owned()),
-        ("User-Agent", USER_AGENT.to_owned()),
-    ];
-    if let Some(account_id) = chatgpt_account_id(file) {
-        header.push(("Chatgpt-Account-Id", account_id));
-    }
+    let header = header(file);
     let usage = answer(
         management
             .call(&ApiCall {
@@ -59,7 +60,116 @@ pub async fn fetch(
     Ok(Observation {
         windows: windows(&usage, Timestamp::now()),
         plan,
+        manual_resets: manual_resets(management, &header, auth_index).await,
     })
+}
+
+/// Redeems one manual reset. The provider answers `reset`, or `already_redeemed` for a
+/// request id it already honored; anything else spent nothing that can be shown.
+pub async fn reset(
+    management: &Management<'_>,
+    file: &AuthFile,
+    auth_index: &str,
+) -> Result<(), RefreshError> {
+    let body = serde_json::json!({ "redeem_request_id": redeem_request_id() }).to_string();
+    let confirmation = answer(
+        management
+            .call(&ApiCall {
+                auth_index,
+                method: "POST",
+                url: CONSUME_URL,
+                header: &header(file),
+                data: Some(&body),
+            })
+            .await?,
+    )?;
+    match confirmation.get("code").and_then(Value::as_str) {
+        Some("reset" | "already_redeemed") => Ok(()),
+        _ => Err(RefreshError::ResetNotConfirmed),
+    }
+}
+
+fn header(file: &AuthFile) -> Vec<(&'static str, String)> {
+    let mut header = vec![
+        ("Authorization", "Bearer $TOKEN$".to_owned()),
+        ("Content-Type", "application/json".to_owned()),
+        ("User-Agent", USER_AGENT.to_owned()),
+    ];
+    if let Some(account_id) = chatgpt_account_id(file) {
+        header.push(("Chatgpt-Account-Id", account_id));
+    }
+
+    header
+}
+
+/// The UI reads the list as optional, so a failure leaves the usage standing and the
+/// stored list untouched.
+async fn manual_resets(
+    management: &Management<'_>,
+    header: &[(&'static str, String)],
+    auth_index: &str,
+) -> ManualResets {
+    let mut header = header.to_vec();
+    header.extend([
+        ("Accept", "application/json".to_owned()),
+        ("OpenAI-Beta", "codex-1".to_owned()),
+        ("Originator", "Codex Desktop".to_owned()),
+    ]);
+    management
+        .call(&ApiCall {
+            auth_index,
+            method: "GET",
+            url: RESET_CREDITS_URL,
+            header: &header,
+            data: None,
+        })
+        .await
+        .map_err(RefreshError::from)
+        .and_then(answer)
+        .and_then(|listed| expiries(&listed).ok_or(RefreshError::Unreadable))
+        .inspect_err(|error| tracing::warn!(%error, "the Codex manual reset list was not read"))
+        .map_or(ManualResets::Unchanged, ManualResets::Reported)
+}
+
+fn expiries(listed: &Value) -> Option<Vec<Timestamp>> {
+    if !listed.is_object() || !RESET_LIST_KEYS.iter().any(|key| listed.get(key).is_some()) {
+        return None;
+    }
+    let credits = listed.get("credits").and_then(Value::as_array);
+
+    Some(
+        credits
+            .into_iter()
+            .flatten()
+            .filter(|credit| {
+                field(credit, &["reset_type", "resetType"])
+                    .and_then(text)
+                    .is_some_and(|kind| kind == RATE_LIMIT_RESET)
+            })
+            .filter(|credit| {
+                credit
+                    .get("status")
+                    .and_then(text)
+                    .is_some_and(|status| status == "available")
+            })
+            .filter_map(|credit| field(credit, &["expires_at", "expiresAt"]).and_then(instant))
+            .collect(),
+    )
+}
+
+/// A random version 4 UUID, as the UI sends.
+fn redeem_request_id() -> String {
+    let bits = rand::random::<u128>();
+    let bits = (bits & !(0xF << 76)) | (0x4 << 76);
+    let bits = (bits & !(0x3 << 62)) | (0x2 << 62);
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        bits >> 96,
+        (bits >> 80) & 0xFFFF,
+        (bits >> 64) & 0xFFFF,
+        (bits >> 48) & 0xFFFF,
+        bits & 0xFFFF_FFFF_FFFF,
+    )
 }
 
 fn chatgpt_account_id(file: &AuthFile) -> Option<String> {
@@ -273,5 +383,48 @@ mod tests {
         let windows = windows(&usage, Timestamp::UNIX_EPOCH);
 
         assert_eq!(windows[0].used_fraction, Some(1.0));
+    }
+
+    #[test]
+    fn only_available_rate_limit_resets_with_an_expiry_are_offered() {
+        let listed = json!({
+            "available_count": 3,
+            "credits": [
+                { "id": "a", "reset_type": "codex_rate_limits", "status": "available", "expires_at": "2026-11-01T00:00:00Z" },
+                { "id": "b", "resetType": "codex_rate_limits", "status": "available", "expiresAt": 1_793_000_000 },
+                { "id": "c", "reset_type": "codex_rate_limits", "status": "redeemed", "expires_at": "2026-11-02T00:00:00Z" },
+                { "id": "d", "reset_type": "other", "status": "available", "expires_at": "2026-11-03T00:00:00Z" },
+                { "id": "e", "reset_type": "codex_rate_limits", "status": "available", "expires_at": "soon" },
+            ],
+        });
+
+        assert_eq!(
+            expiries(&listed),
+            Some(vec![
+                "2026-11-01T00:00:00Z".parse().expect("an instant"),
+                Timestamp::from_second(1_793_000_000).expect("an instant"),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_not_a_reset_list_is_not_read_as_no_resets() {
+        assert_eq!(expiries(&json!({ "detail": "Not Found" })), None);
+        assert_eq!(expiries(&json!([])), None);
+        assert_eq!(expiries(&json!({ "available_count": 0 })), Some(Vec::new()));
+    }
+
+    #[test]
+    fn a_redeem_request_id_is_a_version_4_uuid() {
+        let id = redeem_request_id();
+        let groups = id.split('-').map(str::len).collect::<Vec<_>>();
+
+        assert_eq!(groups, [8, 4, 4, 4, 12], "{id}");
+        assert_eq!(id.as_bytes()[14], b'4', "{id}");
+        assert!(
+            matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
+            "{id}"
+        );
+        assert_ne!(id, redeem_request_id());
     }
 }

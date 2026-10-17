@@ -42,6 +42,7 @@ pub async fn fetch(
     Ok(Observation {
         windows: windows(&usage, Timestamp::now()),
         plan: None,
+        ..Observation::default()
     })
 }
 

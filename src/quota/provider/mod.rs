@@ -66,6 +66,30 @@ impl Provider {
             Self::Meta => meta::fetch(management, file, auth_index).await,
         }
     }
+
+    #[must_use]
+    pub fn can_reset(self, file: &AuthFile) -> bool {
+        self == Self::Codex && self.can_refresh(file)
+    }
+
+    /// Spends one manual reset. Sent once: the provider cannot tell a repeated request
+    /// from a second reset, so a failure is never retried here.
+    pub async fn reset(
+        self,
+        management: &Management<'_>,
+        file: &AuthFile,
+        auth_index: &str,
+    ) -> Result<(), RefreshError> {
+        match self {
+            Self::Codex => codex::reset(management, file, auth_index).await,
+            Self::Claude
+            | Self::Antigravity
+            | Self::Kimi
+            | Self::Devin
+            | Self::Xai
+            | Self::Meta => Err(RefreshError::NoManualReset),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,11 +113,19 @@ impl FromStr for Provider {
     }
 }
 
+#[derive(Debug, Default)]
+pub enum ManualResets {
+    #[default]
+    Unchanged,
+    Reported(Vec<Timestamp>),
+}
+
 /// What one hard refresh learned about a credential.
 #[derive(Debug, Default)]
 pub struct Observation {
     pub windows: Vec<NewWindow>,
     pub plan: Option<String>,
+    pub manual_resets: ManualResets,
 }
 
 /// Every message is safe to store and to answer to a client: none quotes a response body.
@@ -115,6 +147,10 @@ pub enum RefreshError {
     InvalidCredentialFile,
     #[error("the credential file has no dca_token")]
     MissingDcaToken,
+    #[error("the provider grants no manual reset")]
+    NoManualReset,
+    #[error("the provider did not confirm the manual reset")]
+    ResetNotConfirmed,
 }
 
 /// The provider's answer as JSON, or why it is not one.

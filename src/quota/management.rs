@@ -114,6 +114,27 @@ impl<'a> Management<'a> {
             .await
             .map_err(ManagementError::from)
     }
+
+    pub async fn reset_cooldown(&self, auth_index: &str) -> Result<(), ManagementError> {
+        let response = self
+            .client
+            .post(format!("{}{PREFIX}/reset-quota", self.base_url))
+            .bearer_auth(self.secret.expose())
+            .json(&CooldownReset { auth_index })
+            .timeout(CALL_TIMEOUT)
+            .send()
+            .await
+            .map_err(ManagementError::from)?;
+        let answer: CooldownResetAnswer = successful(response)?
+            .json()
+            .await
+            .map_err(ManagementError::from)?;
+        if answer.status != "ok" || answer.auth_index != auth_index {
+            return Err(ManagementError::CooldownKept);
+        }
+
+        Ok(())
+    }
 }
 
 pub struct AuthFiles {
@@ -178,6 +199,19 @@ struct Listing {
     files: Option<Vec<Value>>,
 }
 
+#[derive(Serialize)]
+struct CooldownReset<'a> {
+    auth_index: &'a str,
+}
+
+#[derive(Deserialize)]
+struct CooldownResetAnswer {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    auth_index: String,
+}
+
 /// The request body the official management UI sends to `api-call`.
 #[derive(Debug, Serialize)]
 pub struct ApiCall<'a> {
@@ -209,6 +243,8 @@ pub enum ManagementError {
     Status(u16),
     #[error("the source's base URL is not a URL")]
     InvalidBaseUrl,
+    #[error("CLIProxy did not confirm that it cleared the credential's cooldowns")]
+    CooldownKept,
 }
 
 impl From<reqwest::Error> for ManagementError {

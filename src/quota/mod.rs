@@ -8,6 +8,7 @@
 pub mod calibration;
 pub mod credential;
 pub mod management;
+pub mod manual_reset;
 pub mod prediction;
 pub mod provider;
 pub mod window;
@@ -27,6 +28,7 @@ use crate::database::DatabaseError;
 use crate::id::Id;
 use crate::quota::credential::QuotaAccount;
 use crate::quota::management::{AuthFile, AuthFiles, Management, ManagementError};
+use crate::quota::manual_reset::Credit;
 use crate::quota::provider::{Provider, RefreshError};
 use crate::quota::window::QuotaWindow;
 use crate::source::{Source, SourceKind};
@@ -145,6 +147,7 @@ pub async fn refresh(
         ),
         None => None,
     };
+    let refresh_guard = state.manual_reset_lock.lock().await;
     let mut outcome = Refresh::default();
     let mut found = false;
     for (source, config) in sources(state, source_id).await? {
@@ -199,6 +202,7 @@ pub async fn refresh(
     if only.is_some() && !found {
         return Err(RefreshRequestError::NotRefreshable);
     }
+    drop(refresh_guard);
 
     Ok(outcome)
 }
@@ -303,6 +307,9 @@ async fn record(
     match result {
         Ok(observation) => {
             QuotaWindow::replace(&mut transaction, account_id, &observation.windows, at).await?;
+            if let provider::ManualResets::Reported(expiries) = &observation.manual_resets {
+                Credit::replace(&mut transaction, account_id, expiries).await?;
+            }
             QuotaAccount::refreshed(
                 &mut transaction,
                 account_id,

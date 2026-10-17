@@ -117,6 +117,7 @@ pub async fn fetch(
     Ok(Observation {
         windows: windows?,
         plan,
+        ..Observation::default()
     })
 }
 

@@ -107,7 +107,11 @@ fn read(key: &Value) -> Observation {
         .and_then(text)
         .or_else(|| usage.get("tier").and_then(text));
 
-    Observation { windows, plan }
+    Observation {
+        windows,
+        plan,
+        ..Observation::default()
+    }
 }
 
 fn push(
