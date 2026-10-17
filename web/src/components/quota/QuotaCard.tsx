@@ -3,7 +3,7 @@ import type { Accessor } from "solid-js";
 import { createEffect, createMemo, createSignal, For, Match, Show, Switch, untrack } from "solid-js";
 
 import type { AccountHealthStrip } from "../../api/accountHealth";
-import type { QuotaAccount, QuotaPrediction, QuotaWindow } from "../../api/quota";
+import type { QuotaAccount, QuotaPrediction, QuotaRefresh, QuotaWindow } from "../../api/quota";
 import { refreshQuota } from "../../api/quota";
 import { accountDescription, accountLabel, isUnlabelled, planLabel } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
@@ -15,6 +15,7 @@ import { AuthKindIcon } from "../AccountName";
 import { HealthStrip } from "../HealthStrip";
 import { IconButton } from "../IconButton";
 import { providerBrandColor, ProviderIcon } from "../ProviderIcon";
+import { ManualResets } from "./ManualResets";
 
 const LEVEL_TONES: Record<QuotaLevel, { fill: string; text: string; }> = {
   comfortable: { fill: "bg-emerald-500", text: "text-slate-900 dark:text-slate-100" },
@@ -223,10 +224,12 @@ export const QuotaCard = (properties: {
   latestHard: string | undefined;
   isRefreshBlocked: boolean;
   onAccounts: (accounts: readonly QuotaAccount[]) => void;
+  onReset: (result: QuotaRefresh) => void;
   health: Accessor<AccountHealthStrip>;
   arrival: RequestArrival | undefined;
 }) => {
   const [isRefreshing, setIsRefreshing] = createSignal(false);
+  const [isResetting, setIsResetting] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
   const isSoftBehind = createMemo(() => isBehind(properties.entry.soft_observed_at, properties.latestSoft));
   const isHardBehind = createMemo(() =>
@@ -293,7 +296,8 @@ export const QuotaCard = (properties: {
         card = element;
       }}
       style={{ "--brand": providerBrandColor(properties.entry.account.provider) }}
-      class="relative flex min-w-0 flex-col gap-3 rounded-panel bg-surface p-4"
+      tabindex={-1}
+      class="relative flex min-w-0 flex-col gap-3 rounded-panel bg-surface p-4 focus-visible:outline-2 focus-visible:outline-blue-500"
     >
       <span
         ref={(element) => {
@@ -324,7 +328,7 @@ export const QuotaCard = (properties: {
                 label={`Refresh ${accountLabel(properties.entry.account)} from the provider`}
                 tooltip={isRefreshing() ? "Refreshing from the provider" : "Refresh from the provider"}
                 isPending={isRefreshing()}
-                isDisabled={isRefreshing() || properties.isRefreshBlocked}
+                isDisabled={isRefreshing() || isResetting() || properties.isRefreshBlocked}
                 onClick={() => void refresh()}
               >
                 <TbOutlineRefresh size={16} />
@@ -344,6 +348,15 @@ export const QuotaCard = (properties: {
               </span>
             )}
           </Show>
+          <ManualResets
+            entry={properties.entry}
+            nowMs={properties.nowMs}
+            isBlocked={isRefreshing() || properties.isRefreshBlocked}
+            onPending={setIsResetting}
+            onAccounts={properties.onAccounts}
+            onReset={properties.onReset}
+            onFocusFallback={() => card?.focus()}
+          />
           <Show when={properties.entry.disabled}>
             <StatusMark tone="danger" text="Disabled" />
           </Show>

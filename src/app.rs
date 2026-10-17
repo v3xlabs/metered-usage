@@ -1,4 +1,4 @@
-use tokio::sync::broadcast;
+use tokio::sync::{Mutex, broadcast};
 
 use crate::config::Config;
 use crate::database::Database;
@@ -21,6 +21,7 @@ pub struct AppState {
     pub usage: broadcast::Sender<UsageUpdate>,
     /// Shared by every outbound call so connections are pooled.
     pub http: reqwest::Client,
+    pub manual_reset_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -39,6 +40,7 @@ impl AppState {
             config,
             usage: broadcast::channel(USAGE_BACKLOG).0,
             http: reqwest::Client::builder().build()?,
+            manual_reset_lock: Mutex::new(()),
         })
     }
 }

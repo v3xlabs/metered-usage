@@ -249,6 +249,8 @@ struct QuotaStatusOutput {
 
 /// A CLIProxy credential's last known health and quota. `next_retry_after` is CLIProxy's
 /// scheduling decision, not the provider's reset; a window's `resets_at` is the provider's.
+/// `manual_resets` lists every unexpired manual reset the provider granted, soonest expiry
+/// first; spending one needs the HTTP API's explicit confirmation.
 #[derive(Debug, Serialize, JsonSchema)]
 struct QuotaAccountOutput {
     account: AccountSummaryOutput,
@@ -265,6 +267,7 @@ struct QuotaAccountOutput {
     hard_refresh_error: Option<String>,
     hard_refreshable: bool,
     windows: Vec<QuotaWindowOutput>,
+    manual_resets: Vec<ManualResetOutput>,
 }
 
 impl From<QuotaAccount> for QuotaAccountOutput {
@@ -309,6 +312,13 @@ impl From<QuotaAccount> for QuotaAccountOutput {
                     observed_at: window.observed_at.to_string(),
                 })
                 .collect(),
+            manual_resets: account
+                .manual_resets
+                .into_iter()
+                .map(|expires_at| ManualResetOutput {
+                    expires_at: expires_at.to_string(),
+                })
+                .collect(),
         }
     }
 }
@@ -334,6 +344,12 @@ struct QuotaWindowOutput {
     window_seconds: Option<i64>,
     resets_at: Option<String>,
     observed_at: String,
+}
+
+/// `expires_at` is RFC 3339.
+#[derive(Debug, Serialize, JsonSchema)]
+struct ManualResetOutput {
+    expires_at: String,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

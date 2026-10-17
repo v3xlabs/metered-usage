@@ -11,6 +11,7 @@ use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
 use crate::quota::management::AuthFile;
+use crate::quota::manual_reset::Credit;
 use crate::quota::window::QuotaWindow;
 use crate::source::Source;
 
@@ -55,6 +56,8 @@ pub struct QuotaAccount {
     pub last_used_at: Option<StoredTimestamp>,
     #[sqlx(skip)]
     pub windows: Vec<QuotaWindow>,
+    #[sqlx(skip)]
+    pub manual_resets: Vec<Timestamp>,
 }
 
 impl QuotaAccount {
@@ -77,8 +80,24 @@ impl QuotaAccount {
                     grouped
                 },
             );
+        let mut manual_resets = Credit::list_unexpired(database, source_id, Timestamp::now())
+            .await?
+            .into_iter()
+            .fold(
+                HashMap::<Id<Account>, Vec<Timestamp>>::new(),
+                |mut grouped, reset| {
+                    grouped
+                        .entry(reset.account_id)
+                        .or_default()
+                        .push(reset.expires_at);
+                    grouped
+                },
+            );
         for account in &mut accounts {
             account.windows = windows.remove(&account.account.id).unwrap_or_default();
+            account.manual_resets = manual_resets
+                .remove(&account.account.id)
+                .unwrap_or_default();
         }
 
         Ok(accounts)

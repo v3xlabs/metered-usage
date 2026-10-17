@@ -61,6 +61,7 @@ pub async fn fetch(
     Ok(Observation {
         windows,
         plan: plan_status.pointer("/planInfo/planName").and_then(text),
+        ..Observation::default()
     })
 }
 

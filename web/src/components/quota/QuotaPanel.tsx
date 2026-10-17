@@ -251,6 +251,15 @@ export const QuotaPanel = () => {
                             latestHard={latest().hard}
                             isRefreshBlocked={isRefreshingAll()}
                             onAccounts={setAccounts}
+                            onReset={(result) => {
+                              setNotice({
+                                tone: result.failed > 0 ? "error" : "info",
+                                text: result.failed > 0
+                                  ? "Quota reset was accepted, but the updated quota could not be read. Refresh from the provider before another reset."
+                                  : "Quota reset. Quota and available resets are updated.",
+                              });
+                              setAccounts(result.accounts);
+                            }}
                             health={health}
                             arrival={arrival()}
                           />

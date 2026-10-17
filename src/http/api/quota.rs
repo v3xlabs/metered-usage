@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use jiff::Timestamp;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
@@ -10,6 +11,7 @@ use crate::http::api::account::AccountSummaryOutput;
 use crate::prelude::*;
 use crate::quota::calibration::{Calibration, Outlier};
 use crate::quota::credential::{Cooldown, QuotaAccount};
+use crate::quota::manual_reset::ResetRequestError;
 use crate::quota::prediction::Prediction;
 use crate::quota::window::QuotaWindow;
 use crate::quota::{RefreshRequestError, SourceFailure};
@@ -126,6 +128,62 @@ impl QuotaApi {
             Ok(list) => QuotaRefreshResponse::Refreshed(Json(QuotaRefresh {
                 refreshed: refresh.refreshed,
                 failed: refresh.failed,
+                accounts: list.accounts,
+            })),
+            Err(error) => QuotaRefreshResponse::Failed(Json(error)),
+        }
+    }
+
+    /// Spends one manual reset the provider granted the account, then clears CLIProxy's
+    /// cooldowns on it and hard refreshes it, as the official management UI does. Only an
+    /// explicit `confirmed: true` spends one, and a failed request is never retried here.
+    /// A credential CLIProxy no longer lists, a disabled one, a provider without manual
+    /// resets and an account without an unexpired one are refused before the provider is
+    /// asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
+    /// the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
+    /// and `manual_resets` stays empty until a provider list is read successfully. Stored
+    /// resets are cleared before the consuming request, so an unknown outcome also blocks
+    /// another reset across clients and restarts until a hard refresh reads that list.
+    #[oai(path = "/quota/reset", method = "post", operation_id = "reset_quota")]
+    async fn reset_quota(&self, input: Json<QuotaResetInput>) -> QuotaRefreshResponse {
+        if !input.0.confirmed {
+            return QuotaRefreshResponse::Invalid(Json(message(
+                "a manual reset is spent only when confirmed is true",
+            )));
+        }
+        let Ok(account_id) = input.0.account_id.parse::<Id<Account>>() else {
+            return QuotaRefreshResponse::Missing(Json(message("account was not found")));
+        };
+        let reset = match crate::quota::manual_reset::spend(
+            &self.state,
+            &self.state.http,
+            account_id,
+        )
+        .await
+        {
+            Ok(reset) => reset,
+            Err(ResetRequestError::UnknownAccount) => {
+                return QuotaRefreshResponse::Missing(Json(message("account was not found")));
+            }
+            Err(
+                error @ (ResetRequestError::NotListed
+                | ResetRequestError::Disabled
+                | ResetRequestError::NotResettable
+                | ResetRequestError::NoneAvailable),
+            ) => return QuotaRefreshResponse::Invalid(Json(message(&error.to_string()))),
+            Err(
+                error @ (ResetRequestError::Unreachable(_) | ResetRequestError::OutcomeUnknown(_)),
+            ) => {
+                return QuotaRefreshResponse::Unreachable(Json(message(&error.to_string())));
+            }
+            Err(ResetRequestError::Database(error)) => {
+                return QuotaRefreshResponse::Failed(Json(failure("reset_quota", &error)));
+            }
+        };
+        match self.everything("reset_quota").await {
+            Ok(list) => QuotaRefreshResponse::Refreshed(Json(QuotaRefresh {
+                refreshed: reset.refreshed,
+                failed: reset.failed,
                 accounts: list.accounts,
             })),
             Err(error) => QuotaRefreshResponse::Failed(Json(error)),
@@ -264,6 +322,22 @@ impl From<Cooldown> for CooldownOutput {
     }
 }
 
+/// A manual quota reset the provider granted the credential and has not seen spent.
+#[derive(Debug, Object)]
+#[oai(rename = "ManualReset")]
+pub struct ManualResetOutput {
+    /// RFC 3339; the reset is no longer offered from this instant.
+    expires_at: String,
+}
+
+impl From<Timestamp> for ManualResetOutput {
+    fn from(expires_at: Timestamp) -> Self {
+        Self {
+            expires_at: expires_at.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Object)]
 #[oai(rename = "QuotaAccount", skip_serializing_if_is_none)]
 pub struct QuotaAccountOutput {
@@ -293,6 +367,10 @@ pub struct QuotaAccountOutput {
     /// When the last request charged to the credential happened.
     last_used_at: Option<String>,
     windows: Vec<QuotaWindowOutput>,
+    /// Every unexpired manual reset, soonest expiry first. Empty for a provider that grants
+    /// none or whose list is unknown, including after a consuming request until a hard
+    /// refresh successfully reads the provider's list again.
+    manual_resets: Vec<ManualResetOutput>,
 }
 
 impl From<QuotaAccount> for QuotaAccountOutput {
@@ -314,6 +392,7 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             removed_at: account.removed_at.map(|at| at.0.to_string()),
             last_used_at: account.last_used_at.map(|at| at.0.to_string()),
             windows: account.windows.into_iter().map(Into::into).collect(),
+            manual_resets: account.manual_resets.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -346,6 +425,13 @@ pub struct QuotaSyncInput {
 #[derive(Debug, Object)]
 pub struct QuotaRefreshInput {
     account_id: Option<String>,
+}
+
+#[derive(Debug, Object)]
+pub struct QuotaResetInput {
+    account_id: String,
+    /// Must be true: the reset is spent at the provider and cannot be taken back.
+    confirmed: bool,
 }
 
 #[derive(ApiResponse)]

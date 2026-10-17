@@ -520,6 +520,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/quota/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Spends one manual reset the provider granted the account, then clears CLIProxy's
+         *     cooldowns on it and hard refreshes it, as the official management UI does. Only an
+         *     explicit `confirmed: true` spends one, and a failed request is never retried here.
+         *     A credential CLIProxy no longer lists, a disabled one, a provider without manual
+         *     resets and an account without an unexpired one are refused before the provider is
+         *     asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
+         *     the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
+         *     and `manual_resets` stays empty until a provider list is read successfully. Stored
+         *     resets are cleared before the consuming request, so an unknown outcome also blocks
+         *     another reset across clients and restarts until a hard refresh reads that list.
+         */
+        post: operations["reset_quota"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -752,6 +780,14 @@ export interface components {
             /** Format: double */
             effective_usd_per_mtok?: number;
         };
+        /**
+         * ManualReset
+         * @description A manual quota reset the provider granted the credential and has not seen spent.
+         */
+        ManualReset: {
+            /** @description RFC 3339; the reset is no longer offered from this instant. */
+            expires_at: string;
+        };
         /** MergeInput */
         MergeInput: {
             into_account_id: string;
@@ -896,6 +932,12 @@ export interface components {
             /** @description When the last request charged to the credential happened. */
             last_used_at?: string;
             windows: components["schemas"]["QuotaWindow"][];
+            /**
+             * @description Every unexpired manual reset, soonest expiry first. Empty for a provider that grants
+             *     none or whose list is unknown, including after a consuming request until a hard
+             *     refresh successfully reads the provider's list again.
+             */
+            manual_resets: components["schemas"]["ManualReset"][];
         };
         /** QuotaCalibration */
         QuotaCalibration: {
@@ -951,6 +993,12 @@ export interface components {
         /** QuotaRefreshInput */
         QuotaRefreshInput: {
             account_id?: string;
+        };
+        /** QuotaResetInput */
+        QuotaResetInput: {
+            account_id: string;
+            /** @description Must be true: the reset is spent at the provider and cannot be taken back. */
+            confirmed: boolean;
         };
         /** QuotaSyncInput */
         QuotaSyncInput: {
@@ -2410,6 +2458,61 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json; charset=utf-8": components["schemas"]["QuotaRefreshInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaRefresh"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    reset_quota: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json; charset=utf-8": components["schemas"]["QuotaResetInput"];
             };
         };
         responses: {

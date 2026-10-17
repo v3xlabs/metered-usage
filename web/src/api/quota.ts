@@ -61,3 +61,25 @@ export const refreshQuota = async (accountId: string | undefined): Promise<Resul
       }
     }
   });
+
+export const resetQuota = async (accountId: string): Promise<Result<QuotaRefresh>> =>
+  settle(async () => {
+    const response = await api("/quota/reset", "post", {
+      contentType: "application/json; charset=utf-8",
+      data: { account_id: accountId, confirmed: true },
+    });
+
+    switch (response.status) {
+      case 200: {
+        return { ok: true, value: response.data };
+      }
+      case 400:
+      case 404:
+      case 502: {
+        return { ok: false, message: response.data.message };
+      }
+      default: {
+        return { ok: false, message: `Reset failed with status ${response.status}. Refresh quota before another reset.` };
+      }
+    }
+  });
