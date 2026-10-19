@@ -1,6 +1,7 @@
 pub mod account;
 pub mod analytics;
 pub mod app;
+pub mod change;
 pub mod collector;
 pub mod config;
 pub mod database;

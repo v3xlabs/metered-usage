@@ -16,6 +16,7 @@ use sqlx::{
     Type,
 };
 
+use crate::change::snapshot::{Scope, Snapshot};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
@@ -84,14 +85,18 @@ impl Account {
         id: Id<Account>,
         display_name: Option<&str>,
     ) -> Result<Option<Self>, DatabaseError> {
+        let mut transaction = database.write().await?;
+        let snapshot = Snapshot::accounts(&mut transaction, Scope::Account(id)).await?;
         let renamed = sqlx::query("UPDATE account SET display_name = ? WHERE account_id = ?")
             .bind(display_name)
             .bind(id)
-            .execute(&database.pool)
+            .execute(&mut *transaction)
             .await?;
         if renamed.rows_affected() == 0 {
             return Ok(None);
         }
+        snapshot.record_changes(&mut transaction).await?;
+        transaction.commit().await?;
 
         Self::load(database, id).await
     }
@@ -212,6 +217,8 @@ impl Account {
         if target.merged_into_account_id.is_some() {
             return Err(MergeError::TargetMerged);
         }
+        let snapshot =
+            Snapshot::accounts(&mut transaction, Scope::Source(merged.source_id)).await?;
         for statement in [
             "UPDATE usage_event SET account_id = ? WHERE account_id = ?",
             "UPDATE plan SET account_id = ? WHERE account_id = ?",
@@ -243,7 +250,8 @@ impl Account {
         .execute(&mut *transaction)
         .await
         .map_err(DatabaseError::from)?;
-        transaction.commit().await.map_err(DatabaseError::from)?;
+        snapshot.record_changes(&mut transaction).await?;
+        transaction.commit().await?;
 
         Self::load(database, into).await?.ok_or(MergeError::Missing)
     }

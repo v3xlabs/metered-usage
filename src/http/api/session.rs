@@ -17,7 +17,7 @@ impl SessionApi {
     /// Answers whether the request carries the access token.
     #[oai(path = "/session", method = "get", operation_id = "get_session")]
     async fn get_session(&self, request: &Request) -> SessionResponse {
-        if self.state.token.admits(request) {
+        if self.state.credentials.token.admits(request) {
             SessionResponse::Authenticated
         } else {
             SessionResponse::Unauthorized(Json(refused()))
@@ -27,8 +27,9 @@ impl SessionApi {
     /// Trades the access token for a session cookie.
     #[oai(path = "/session", method = "post", operation_id = "create_session")]
     async fn create_session(&self, input: Json<SessionInput>) -> CreateSessionResponse {
-        if self.state.token.matches(&input.0.token) {
-            CreateSessionResponse::Created(self.state.token.session_cookie())
+        let token = &self.state.credentials.token;
+        if token.matches(&input.0.token) {
+            CreateSessionResponse::Created(token.session_cookie())
         } else {
             CreateSessionResponse::Unauthorized(Json(refused()))
         }

@@ -4,6 +4,7 @@ use jiff::Timestamp;
 
 use crate::account::Account;
 use crate::app::AppState;
+use crate::change::snapshot::{Scope, Snapshot};
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::id::Id;
@@ -97,6 +98,7 @@ pub async fn ingest(
     let mut stored = Vec::with_capacity(records.len());
     let mut is_new_credential = false;
     let mut transaction = database.write().await?;
+    let snapshot = Snapshot::accounts(&mut transaction, Scope::Source(source_id)).await?;
     for record in records {
         let event = match record {
             Incoming::Record(event) => event,
@@ -168,6 +170,7 @@ pub async fn ingest(
             report.duplicates += 1;
         }
     }
+    snapshot.record_changes(&mut transaction).await?;
     transaction.commit().await?;
     if is_new_credential {
         quota::sync_logged(state, Some(source_id)).await;

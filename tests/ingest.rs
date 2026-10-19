@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use metered_usage::app::AppState;
 use metered_usage::config::Config;
 use metered_usage::database::Database;
-use metered_usage::http::auth::Token;
+use metered_usage::http::auth::{Credentials, Token};
 use metered_usage::source::Source as StoredSource;
 use poem::Endpoint;
 use poem::http::{StatusCode, header};
@@ -18,6 +18,7 @@ const CLAUDE: &str = include_str!("fixtures/claude.json");
 const GROK: &str = include_str!("fixtures/grok.json");
 const TOKEN: &str = "correct horse battery staple";
 const READ_TOKEN: &str = "a dashboard that only reads";
+const CONSUMER_TOKEN: &str = "a service that follows quota";
 const API_KEY: &str = "sk-test-0123456789abcd";
 const CONFIG: &str = r#"
     [[source]]
@@ -166,9 +167,12 @@ async fn gateway() -> Result<Gateway<impl Endpoint>, Box<dyn std::error::Error>>
     })?;
     let database = Database::open("sqlite::memory:", 0).await?;
     StoredSource::sync(&database, &config).await?;
-    let token = Token::try_from(TOKEN.to_owned())?;
-    let read_token = Token::try_from(READ_TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, Some(read_token), config)?);
+    let credentials = Credentials {
+        token: Token::try_from(TOKEN.to_owned())?,
+        read_token: Some(Token::try_from(READ_TOKEN.to_owned())?),
+        consumer_token: Some(Token::try_from(CONSUMER_TOKEN.to_owned())?),
+    };
+    let state = Arc::new(AppState::new(database, credentials, config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
     let anonymous = TestClient::new(metered_usage::http::routes(&state));
@@ -832,6 +836,64 @@ async fn the_read_token_reads_and_never_writes() {
         .send()
         .await;
     mcp.assert_status(StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
+    let gateway = gateway().await.expect("a gateway");
+    let bearer = format!("Bearer {CONSUMER_TOKEN}");
+
+    for path in [
+        "/api/events",
+        "/api/quota",
+        "/api/prices?model=claude-sonnet-4",
+        "/api/accounts",
+    ] {
+        let response = gateway
+            .anonymous
+            .get(path)
+            .header(header::AUTHORIZATION, &bearer)
+            .send()
+            .await;
+        assert_eq!(response.0.status(), StatusCode::OK, "{path}");
+    }
+    for path in [
+        "/api/usage/events",
+        "/api/analytics/summary",
+        "/api/sources",
+        "/mcp",
+    ] {
+        let response = gateway
+            .anonymous
+            .get(path)
+            .header(header::AUTHORIZATION, &bearer)
+            .send()
+            .await;
+        assert_eq!(response.0.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+    for path in [
+        "/api/quota/refresh",
+        "/api/quota/reset",
+        "/api/prices/sync",
+        "/api/prices",
+    ] {
+        let response = gateway
+            .anonymous
+            .post(path)
+            .header(header::AUTHORIZATION, &bearer)
+            .body_json(&json!({}))
+            .send()
+            .await;
+        assert_eq!(response.0.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let rename = gateway
+        .anonymous
+        .patch("/api/accounts/00000000001")
+        .header(header::AUTHORIZATION, &bearer)
+        .body_json(&json!({ "display_name": "renamed" }))
+        .send()
+        .await;
+    assert_eq!(rename.0.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

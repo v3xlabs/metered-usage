@@ -16,6 +16,7 @@ use sqlx::{Database as SqlxDatabase, Decode, Encode, FromRow, QueryBuilder, Sqli
 use tokio::time::MissedTickBehavior;
 
 use crate::app::AppState;
+use crate::change::{Change, Subject};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
@@ -87,6 +88,7 @@ impl ModelPrice {
         origin: Origin,
     ) -> Result<Self, DatabaseError> {
         let id = database.ids.next::<Self>();
+        let mut transaction = database.write().await?;
         sqlx::query(
             "INSERT INTO model_price (price_id, provider, model, service_tier, min_input_tokens, \
              origin, effective_from, input_usd_per_mtok, cached_input_usd_per_mtok, \
@@ -105,8 +107,16 @@ impl ModelPrice {
         .bind(price.rates.cache_write_usd_per_mtok)
         .bind(price.rates.output_usd_per_mtok)
         .bind(StoredTimestamp::from(Timestamp::now()))
-        .execute(&database.pool)
+        .execute(&mut *transaction)
         .await?;
+        Change::record(
+            &mut transaction,
+            &Subject::Price {
+                model: price.model.clone(),
+            },
+        )
+        .await?;
+        transaction.commit().await?;
 
         Ok(Self {
             id,

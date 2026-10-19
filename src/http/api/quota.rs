@@ -7,6 +7,7 @@ use poem_openapi::{ApiResponse, Object, OpenApi};
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::account::AccountSummaryOutput;
+use crate::http::conditional::conditional;
 use crate::prelude::*;
 use crate::quota::calibration::{Calibration, Outlier};
 use crate::quota::credential::{Cooldown, QuotaAccount};
@@ -36,7 +37,27 @@ impl QuotaApi {
 #[OpenApi]
 impl QuotaApi {
     /// The last known state and quota of every CLIProxy credential, from the database only.
-    #[oai(path = "/quota", method = "get", operation_id = "list_quota")]
+    ///
+    /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+    /// with no body while those bytes are the same. Every soft sync moves
+    /// `soft_observed_at`, and usage moves `last_used_at` and the predictions, so the tag
+    /// changes often; follow `/events` to learn when to read again.
+    #[oai(
+        path = "/quota",
+        method = "get",
+        operation_id = "list_quota",
+        transform = "conditional",
+        request_header(
+            name = "If-None-Match",
+            ty = "Option<String>",
+            description = "The ETag of an earlier answer. While the answer is the same, it is 304 with no body."
+        ),
+        response_header(
+            name = "ETag",
+            ty = "Option<String>",
+            description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
+        )
+    )]
     async fn list_quota(&self, source_id: Query<Option<String>>) -> QuotaListResponse {
         let source_id = match source_id.0.as_deref().map(str::parse::<Id<Source>>) {
             None => None,

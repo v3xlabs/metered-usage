@@ -1,6 +1,6 @@
 //! LiteLLM's model cost map, as published and as a running proxy serves it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use sqlx::FromRow;
 
 use crate::app::AppState;
+use crate::change::{Change, Subject};
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::price::{ModelPrice, Origin, Rates};
@@ -192,6 +193,7 @@ async fn record(
     let now = StoredTimestamp::from(Timestamp::now());
     let mut transaction = database.write().await?;
     let mut latest = HashMap::<Key, Rates>::new();
+    let mut changed = BTreeSet::new();
     let known = sqlx::query_as::<_, KnownPrice>(
         "SELECT provider, model, service_tier, min_input_tokens, input_usd_per_mtok, \
          cached_input_usd_per_mtok, cache_write_usd_per_mtok, output_usd_per_mtok \
@@ -248,8 +250,12 @@ async fn record(
         .bind(now)
         .execute(&mut *transaction)
         .await?;
+        changed.insert(model.clone());
         latest.insert(key, price.rates);
         report.inserted += 1;
+    }
+    for model in changed {
+        Change::record(&mut transaction, &Subject::Price { model }).await?;
     }
     transaction.commit().await?;
 

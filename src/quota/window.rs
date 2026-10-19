@@ -1,10 +1,10 @@
 //! One limit a provider reported for a credential, normalized so that providers counting in
 //! percent used, percent remaining, or amounts all read as a used fraction.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use sqlx::{FromRow, SqliteConnection};
 
 use crate::account::Account;
@@ -18,6 +18,12 @@ use crate::source::Source;
 /// Kimi's unit, and the one unit this service meters too: each request it records is one
 /// the provider counts.
 pub const REQUESTS: &str = "requests";
+
+/// A provider that gives a reset as seconds from now, as Codex and Kimi can, is stored as
+/// the time of the answer plus those seconds, so two answers about one reset differ by a
+/// second or two of request time. A stored reset this close to the reported one is kept,
+/// so the same report reads the same and records no change. Real resets are minutes apart.
+const RESET_TOLERANCE: SignedDuration = SignedDuration::from_secs(5);
 
 #[derive(Debug, FromRow)]
 pub struct QuotaWindow {
@@ -68,13 +74,22 @@ impl QuotaWindow {
         Ok(windows)
     }
 
-    /// Replaces every window of the account. A key reported twice keeps its first report.
+    /// Replaces every window of the account. A key reported twice keeps its first report. A
+    /// stored reset within [`RESET_TOLERANCE`] of the reported one is kept.
     pub async fn replace(
         connection: &mut SqliteConnection,
         account_id: Id<Account>,
         windows: &[NewWindow],
         observed_at: Timestamp,
     ) -> Result<(), DatabaseError> {
+        let stored = sqlx::query_as::<_, (String, Option<StoredTimestamp>)>(
+            "SELECT window_key, resets_at FROM quota_window WHERE account_id = ?",
+        )
+        .bind(account_id)
+        .fetch_all(&mut *connection)
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
         sqlx::query("DELETE FROM quota_window WHERE account_id = ?")
             .bind(account_id)
             .execute(&mut *connection)
@@ -99,7 +114,12 @@ impl QuotaWindow {
             .bind(window.limit_value)
             .bind(window.unit)
             .bind(window.window_seconds)
-            .bind(window.resets_at.map(StoredTimestamp::from))
+            .bind(window.resets_at.map(
+                |reported| match stored.get(&window.key).copied().flatten() {
+                    Some(kept) if reported.duration_since(kept.0).abs() <= RESET_TOLERANCE => kept,
+                    _ => StoredTimestamp::from(reported),
+                },
+            ))
             .bind(observed_at)
             .bind(window.scope.to_string())
             .bind(window.starts_on_use)

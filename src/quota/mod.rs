@@ -23,6 +23,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::account::{Account, AuthKind, NewAccount};
 use crate::app::AppState;
+use crate::change::snapshot::{Scope, Snapshot};
 use crate::config::SourceConfig;
 use crate::database::DatabaseError;
 use crate::id::Id;
@@ -239,6 +240,7 @@ async fn store<'a>(
     listing: &'a AuthFiles,
 ) -> Result<Vec<(Id<Account>, &'a AuthFile, Option<Provider>)>, DatabaseError> {
     let mut transaction = state.database.write().await?;
+    let snapshot = Snapshot::accounts(&mut transaction, Scope::Source(source_id)).await?;
     let mut stored = Vec::with_capacity(listing.files.len());
     let mut is_complete = listing.is_complete;
     for file in &listing.files {
@@ -292,6 +294,7 @@ async fn store<'a>(
     if is_complete {
         QuotaAccount::mark_unlisted(&mut transaction, source_id, listing.observed_at).await?;
     }
+    snapshot.record_changes(&mut transaction).await?;
     transaction.commit().await?;
 
     Ok(stored)
@@ -304,6 +307,7 @@ async fn record(
     at: Timestamp,
 ) -> Result<(), DatabaseError> {
     let mut transaction = state.database.write().await?;
+    let snapshot = Snapshot::quota(&mut transaction, Scope::Account(account_id)).await?;
     match result {
         Ok(observation) => {
             QuotaWindow::replace(&mut transaction, account_id, &observation.windows, at).await?;
@@ -323,6 +327,7 @@ async fn record(
                 .await?;
         }
     }
+    snapshot.record_changes(&mut transaction).await?;
     transaction.commit().await?;
 
     Ok(())

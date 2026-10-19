@@ -5,7 +5,7 @@ use std::sync::Arc;
 use metered_usage::app::AppState;
 use metered_usage::config::Config;
 use metered_usage::database::Database;
-use metered_usage::http::auth::Token;
+use metered_usage::http::auth::{Credentials, Token};
 use metered_usage::source::Source;
 use metered_usage::usage::dead_letter;
 use poem::Server;
@@ -17,6 +17,7 @@ const DEFAULT_DATABASE_URL: &str = "sqlite:metered-usage.db";
 const DUMP_OPENAPI: &str = "--dump-openapi";
 const TOKEN_VARIABLE: &str = "METERED_USAGE_TOKEN";
 const READ_TOKEN_VARIABLE: &str = "METERED_USAGE_READ_TOKEN";
+const CONSUMER_TOKEN_VARIABLE: &str = "METERED_USAGE_CONSUMER_TOKEN";
 const CONFIG_VARIABLE: &str = "METERED_USAGE_CONFIG";
 
 #[tokio::main]
@@ -41,7 +42,7 @@ async fn main() -> Result<(), std::io::Error> {
         let token =
             Token::try_from(rand::random::<u128>().to_string()).map_err(std::io::Error::other)?;
         let state = Arc::new(
-            AppState::new(database, token, None, Config::default())
+            AppState::new(database, token.into(), Config::default())
                 .map_err(std::io::Error::other)?,
         );
         if let Some(parent) = Path::new(path)
@@ -62,10 +63,8 @@ async fn main() -> Result<(), std::io::Error> {
             )
         })
         .and_then(|token| parse_token(TOKEN_VARIABLE, token))?;
-    let read_token = std::env::var(READ_TOKEN_VARIABLE)
-        .ok()
-        .map(|token| parse_token(READ_TOKEN_VARIABLE, token))
-        .transpose()?;
+    let read_token = optional_token(READ_TOKEN_VARIABLE)?;
+    let consumer_token = optional_token(CONSUMER_TOKEN_VARIABLE)?;
     let database_url = environment("DATABASE_URL", DEFAULT_DATABASE_URL);
     let address = match std::env::var("BIND_ADDRESS") {
         Ok(address) => address.parse::<SocketAddr>().map_err(|error| {
@@ -101,14 +100,20 @@ async fn main() -> Result<(), std::io::Error> {
     Source::sync(&database, &config)
         .await
         .map_err(std::io::Error::other)?;
+    let credentials = Credentials {
+        token,
+        read_token,
+        consumer_token,
+    };
     let state = Arc::new(
-        AppState::new(database, token, read_token, config).map_err(|error| {
+        AppState::new(database, credentials, config).map_err(|error| {
             std::io::Error::other(format!(
                 "no HTTP client, most likely no CA certificate store on this host: {error}"
             ))
         })?,
     );
     dead_letter::spawn_pruning(Arc::clone(&state));
+    metered_usage::change::spawn_pruning(Arc::clone(&state));
     metered_usage::collector::spawn_all(Arc::clone(&state));
     metered_usage::price::spawn(Arc::clone(&state));
     metered_usage::quota::spawn(Arc::clone(&state));
@@ -130,4 +135,11 @@ fn parse_token(variable: &str, value: String) -> Result<Token, std::io::Error> {
             format!("{variable}: {error}"),
         )
     })
+}
+
+fn optional_token(variable: &str) -> Result<Option<Token>, std::io::Error> {
+    std::env::var(variable)
+        .ok()
+        .map(|token| parse_token(variable, token))
+        .transpose()
 }

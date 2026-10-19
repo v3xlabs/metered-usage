@@ -7,6 +7,7 @@ use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 use crate::account::MergeError;
 use crate::app::AppState;
 use crate::http::api::Error;
+use crate::http::conditional::conditional;
 use crate::prelude::*;
 
 pub struct AccountApi {
@@ -15,7 +16,26 @@ pub struct AccountApi {
 
 #[OpenApi]
 impl AccountApi {
-    #[oai(path = "/accounts", method = "get", operation_id = "list_accounts")]
+    /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+    /// with no body while those bytes are the same. Usage moves `last_seen_at`,
+    /// `last_used_at` and `event_count`, so the tag changes often; follow `/events` to learn
+    /// when to read again.
+    #[oai(
+        path = "/accounts",
+        method = "get",
+        operation_id = "list_accounts",
+        transform = "conditional",
+        request_header(
+            name = "If-None-Match",
+            ty = "Option<String>",
+            description = "The ETag of an earlier answer. While the answer is the same, it is 304 with no body."
+        ),
+        response_header(
+            name = "ETag",
+            ty = "Option<String>",
+            description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
+        )
+    )]
     async fn list_accounts(&self) -> AccountListResponse {
         match Account::list(&self.state.database).await {
             Ok(accounts) => AccountListResponse::Found(Json(AccountList {

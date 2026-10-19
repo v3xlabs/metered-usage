@@ -1,5 +1,7 @@
 //! One shared token guards everything that reads or writes usage. A client presents it as
-//! a bearer token, or as the session cookie a browser was given for it.
+//! a bearer token, or as the session cookie a browser was given for it. Two optional tokens
+//! read less: one every `GET`, for a dashboard, and one only what another service needs to
+//! follow quota, resets, prices and accounts.
 
 use std::sync::Arc;
 
@@ -16,6 +18,22 @@ const OPEN: [(Method, &str); 3] = [
     (Method::POST, "/session"),
     (Method::GET, "/session"),
 ];
+
+/// Operations under [`crate::http::MOUNT`] the consumer token reaches, all `GET`: the
+/// change feed and the lists its changes name.
+const CONSUMER_READS: [&str; 4] = ["/events", "/quota", "/prices", "/accounts"];
+
+/// The tokens the API admits, each to its own operations.
+#[derive(Clone)]
+pub struct Credentials {
+    /// Admits every operation.
+    pub token: Token,
+    /// Admits every `GET`, for a dashboard such as Grafana.
+    pub read_token: Option<Token>,
+    /// Admits only the `GET`s of [`CONSUMER_READS`], for a service such as Kettle Code that
+    /// follows quota and prices and reads no usage.
+    pub consumer_token: Option<Token>,
+}
 
 #[derive(Clone)]
 pub struct Token(Arc<str>);
@@ -88,12 +106,44 @@ impl TryFrom<String> for Token {
     }
 }
 
-/// Answers 401 to a request that did not present the token, unless it is one of the
-/// [`OPEN`] operations. The read token admits `GET` only, so a dashboard that holds it
-/// cannot change prices, plans or credentials.
+impl From<Token> for Credentials {
+    /// The token alone, with no narrower one.
+    fn from(token: Token) -> Self {
+        Self {
+            token,
+            read_token: None,
+            consumer_token: None,
+        }
+    }
+}
+
+impl Credentials {
+    /// Whether the request may reach its operation. The narrower tokens admit `GET` only,
+    /// so a dashboard or a service that holds one cannot change prices, plans or
+    /// credentials.
+    #[must_use]
+    pub fn admit(&self, request: &Request) -> bool {
+        if is_open(request) || self.token.admits(request) {
+            return true;
+        }
+        if request.method() != Method::GET {
+            return false;
+        }
+        let path = request.uri().path();
+        self.read_token
+            .as_ref()
+            .is_some_and(|token| token.admits(request))
+            || (CONSUMER_READS.contains(&path)
+                && self
+                    .consumer_token
+                    .as_ref()
+                    .is_some_and(|token| token.admits(request)))
+    }
+}
+
+/// Answers 401 to a request the [`Credentials`] do not admit.
 pub struct RequireCredential {
-    pub token: Token,
-    pub read_token: Option<Token>,
+    pub credentials: Credentials,
 }
 
 impl<E: Endpoint> Middleware<E> for RequireCredential {
@@ -102,28 +152,21 @@ impl<E: Endpoint> Middleware<E> for RequireCredential {
     fn transform(&self, inner: E) -> Self::Output {
         RequireCredentialEndpoint {
             inner,
-            token: self.token.clone(),
-            read_token: self.read_token.clone(),
+            credentials: self.credentials.clone(),
         }
     }
 }
 
 pub struct RequireCredentialEndpoint<E> {
     inner: E,
-    token: Token,
-    read_token: Option<Token>,
+    credentials: Credentials,
 }
 
 impl<E: Endpoint> Endpoint for RequireCredentialEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, request: Request) -> poem::Result<Self::Output> {
-        let reads = request.method() == Method::GET
-            && self
-                .read_token
-                .as_ref()
-                .is_some_and(|token| token.admits(&request));
-        if is_open(&request) || reads || self.token.admits(&request) {
+        if self.credentials.admit(&request) {
             return Ok(self.inner.call(request).await?.into_response());
         }
 

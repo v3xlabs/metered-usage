@@ -3,17 +3,29 @@
 
 pub mod codec;
 
+use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Sqlite, SqlitePool, Transaction};
+use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
+use tokio::sync::watch;
 
 use crate::id::IdGenerator;
 
 pub struct Database {
     pub pool: SqlitePool,
     pub ids: IdGenerator,
+    /// Sent after every commit that recorded a change, so a reader waiting for one wakes.
+    changes: watch::Sender<()>,
+}
+
+/// A transaction that will write before it commits. It reads and writes as the connection
+/// it holds, and drops uncommitted.
+pub struct Write<'a> {
+    transaction: Transaction<'static, Sqlite>,
+    changes: &'a watch::Sender<()>,
+    has_changes: bool,
 }
 
 impl Database {
@@ -43,7 +55,21 @@ impl Database {
         Ok(Self {
             pool,
             ids: IdGenerator::new(node),
+            changes: watch::Sender::new(()),
         })
+    }
+
+    /// Wakes after every later commit that recorded a change. Subscribe before reading the
+    /// changes, so one committed in between is not missed.
+    #[must_use]
+    pub fn subscribe_to_changes(&self) -> watch::Receiver<()> {
+        self.changes.subscribe()
+    }
+
+    /// How many readers are subscribed to changes now, such as long polls that are waiting.
+    #[must_use]
+    pub fn waiting_for_changes(&self) -> usize {
+        self.changes.receiver_count()
     }
 
     /// A transaction that will write before it commits.
@@ -52,8 +78,42 @@ impl Database {
     /// late, and SQLite answers a late upgrade with `SQLITE_BUSY` immediately instead of
     /// waiting out `busy_timeout`, so a reader that arrives while the queue is writing is
     /// refused rather than delayed. Claiming the writer up front makes the wait happen.
-    pub async fn write(&self) -> Result<Transaction<'static, Sqlite>, DatabaseError> {
-        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    pub async fn write(&self) -> Result<Write<'_>, DatabaseError> {
+        Ok(Write {
+            transaction: self.pool.begin_with("BEGIN IMMEDIATE").await?,
+            changes: &self.changes,
+            has_changes: false,
+        })
+    }
+}
+
+impl Write<'_> {
+    /// Makes the commit wake every reader waiting for a change.
+    pub fn mark_changed(&mut self) {
+        self.has_changes = true;
+    }
+
+    pub async fn commit(self) -> Result<(), DatabaseError> {
+        self.transaction.commit().await?;
+        if self.has_changes {
+            self.changes.send_replace(());
+        }
+
+        Ok(())
+    }
+}
+
+impl Deref for Write<'_> {
+    type Target = SqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transaction
+    }
+}
+
+impl DerefMut for Write<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.transaction
     }
 }
 

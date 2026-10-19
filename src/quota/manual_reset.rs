@@ -3,6 +3,7 @@ use reqwest::Client;
 use sqlx::{FromRow, SqliteConnection};
 
 use crate::app::AppState;
+use crate::change::snapshot::{Scope, Snapshot};
 use crate::database::codec::StoredTimestamp;
 use crate::prelude::*;
 use crate::quota::management::Management;
@@ -90,10 +91,13 @@ impl Credit {
         .await?)
     }
 
-    pub async fn clear(database: &Database, account_id: Id<Account>) -> Result<(), DatabaseError> {
+    pub async fn clear(
+        connection: &mut SqliteConnection,
+        account_id: Id<Account>,
+    ) -> Result<(), DatabaseError> {
         sqlx::query("DELETE FROM manual_reset WHERE account_id = ?")
             .bind(account_id)
-            .execute(&database.pool)
+            .execute(connection)
             .await?;
 
         Ok(())
@@ -163,7 +167,11 @@ pub async fn spend(
     if Credit::unexpired_count(&state.database, account_id, Timestamp::now()).await? == 0 {
         return Err(ResetRequestError::NoneAvailable);
     }
-    Credit::clear(&state.database, account_id).await?;
+    let mut transaction = state.database.write().await?;
+    let snapshot = Snapshot::quota(&mut transaction, Scope::Account(account_id)).await?;
+    Credit::clear(&mut transaction, account_id).await?;
+    snapshot.record_changes(&mut transaction).await?;
+    transaction.commit().await?;
     let auth_index = file.entry.auth_index.as_deref().unwrap_or_default();
     provider
         .reset(&management, file, auth_index)

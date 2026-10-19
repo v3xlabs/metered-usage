@@ -15,6 +15,7 @@ use sqlx::{
     Type,
 };
 
+use crate::change::snapshot::{Scope, Snapshot};
 use crate::config::Config;
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
@@ -80,6 +81,8 @@ impl Source {
     /// enabled with the config's name, kind and URL, and every other one is disabled.
     pub async fn sync(database: &Database, config: &Config) -> Result<(), DatabaseError> {
         let mut transaction = database.write().await?;
+        // An account shows its source's name, so renaming a source changes its accounts.
+        let snapshot = Snapshot::accounts(&mut transaction, Scope::All).await?;
         let created_at = StoredTimestamp::from(Timestamp::now());
         for source in &config.sources {
             sqlx::query(
@@ -108,6 +111,7 @@ impl Source {
             disable.push(")");
         }
         disable.build().execute(&mut *transaction).await?;
+        snapshot.record_changes(&mut transaction).await?;
         transaction.commit().await?;
 
         Ok(())

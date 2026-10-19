@@ -630,10 +630,10 @@ mod tests {
             .await
             .expect("an in-memory database");
 
-        let token = "a token".to_owned().try_into().expect("a token");
+        let token = crate::http::auth::Token::try_from("a token".to_owned()).expect("a token");
 
         Arc::new(
-            AppState::new(database, token, None, crate::config::Config::default())
+            AppState::new(database, token.into(), crate::config::Config::default())
                 .expect("an HTTP client"),
         )
     }

@@ -98,6 +98,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same. Usage moves `last_seen_at`,
+         *     `last_used_at` and `event_count`, so the tag changes often; follow `/events` to learn
+         *     when to read again.
+         */
         get: operations["list_accounts"];
         put?: never;
         post?: never;
@@ -354,6 +360,8 @@ export interface paths {
         /**
          * Without `history`, only the latest price of each provider, model, service tier,
          *     threshold and origin.
+         * @description The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same, which holds until a `price.changed`.
          */
         get: operations["list_prices"];
         put?: never;
@@ -468,7 +476,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The last known state and quota of every CLIProxy credential, from the database only. */
+        /**
+         * The last known state and quota of every CLIProxy credential, from the database only.
+         * @description The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same. Every soft sync moves
+         *     `soft_observed_at`, and usage moves `last_used_at` and the predictions, so the tag
+         *     changes often; follow `/events` to learn when to read again.
+         */
         get: operations["list_quota"];
         put?: never;
         post?: never;
@@ -542,6 +556,41 @@ export interface paths {
          *     another reset across clients and restarts until a hard refresh reads that list.
          */
         post: operations["reset_quota"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The changes after `cursor` to the quota, manual resets, prices and accounts, oldest
+         *     first, as a long poll: while there is none, the request waits up to `timeout`
+         *     seconds (default 30, at most 50) for one to commit and answers it at once.
+         * @description Each change names the list to read again. `quota.updated` names an account and a
+         *     window whose reported values changed; `reset.updated` an account whose manual resets
+         *     changed; `account.changed` an account whose names, CLIProxy state or last hard
+         *     refresh changed; `price.changed` a model whose latest price changed. Usage does not
+         *     count, so a window's prediction can move without a change.
+         *
+         *     `kinds` is a comma-separated list of the kinds to answer; without it every kind is
+         *     answered. Read on from the `cursor` of the answer, which passes over the changes
+         *     `kinds` left out.
+         *
+         *     Without `cursor`, answers at once with no changes and the latest cursor: take it,
+         *     read the lists, then follow from it. Changes are kept for a week. A cursor older
+         *     than that, or ahead of the latest one, answers 410 with `oldest_cursor` and
+         *     `latest_cursor`: read the lists again and follow from `latest_cursor`.
+         */
+        get: operations["list_changes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -639,6 +688,47 @@ export interface components {
          * @enum {string}
          */
         Bucket: "hour" | "day" | "week";
+        /**
+         * ChangeEvent
+         * @description One change. Only the fields its kind names are present.
+         */
+        ChangeEvent: {
+            /** Format: int64 */
+            cursor: number;
+            kind: components["schemas"]["ChangeKind"];
+            recorded_at: string;
+            /** @description The account of a `quota.updated`, `reset.updated` or `account.changed`. */
+            account_id?: string;
+            /** @description The window of a `quota.updated`. */
+            window_key?: string;
+            /** @description The model of a `price.changed`. */
+            model?: string;
+        };
+        /** ChangeEvents */
+        ChangeEvents: {
+            events: components["schemas"]["ChangeEvent"][];
+            /**
+             * Format: int64
+             * @description The cursor to send on the next read.
+             */
+            cursor: number;
+        };
+        /** @enum {string} */
+        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed";
+        /** ChangesExpired */
+        ChangesExpired: {
+            message: string;
+            /**
+             * Format: int64
+             * @description The lowest cursor still answered.
+             */
+            oldest_cursor: number;
+            /**
+             * Format: int64
+             * @description The cursor to follow from after reading the lists again.
+             */
+            latest_cursor: number;
+        };
         /** CollectorState */
         CollectorState: {
             connected_since?: string;
@@ -1503,7 +1593,10 @@ export interface operations {
     list_accounts: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1511,6 +1604,8 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -1519,6 +1614,8 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2058,7 +2155,10 @@ export interface operations {
                 origin?: components["schemas"]["PriceOrigin"];
                 history?: boolean;
             };
-            header?: never;
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2066,6 +2166,8 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2074,6 +2176,8 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2379,7 +2483,10 @@ export interface operations {
             query?: {
                 source_id?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2387,6 +2494,8 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2395,6 +2504,8 @@ export interface operations {
             };
             400: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2403,6 +2514,8 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2567,6 +2680,53 @@ export interface operations {
                 };
             };
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    list_changes: {
+        parameters: {
+            query?: {
+                cursor?: number;
+                kinds?: string;
+                timeout?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["ChangeEvents"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["ChangesExpired"];
+                };
+            };
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

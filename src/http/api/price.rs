@@ -8,6 +8,7 @@ use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 use crate::app::AppState;
 use crate::database::DatabaseError;
 use crate::http::api::Error;
+use crate::http::conditional::conditional;
 use crate::price::catalog::{self, SyncReport};
 use crate::price::{ModelPrice, NewPrice, Origin, PriceFilter, Rates};
 
@@ -19,7 +20,25 @@ pub struct PriceApi {
 impl PriceApi {
     /// Without `history`, only the latest price of each provider, model, service tier,
     /// threshold and origin.
-    #[oai(path = "/prices", method = "get", operation_id = "list_prices")]
+    ///
+    /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+    /// with no body while those bytes are the same, which holds until a `price.changed`.
+    #[oai(
+        path = "/prices",
+        method = "get",
+        operation_id = "list_prices",
+        transform = "conditional",
+        request_header(
+            name = "If-None-Match",
+            ty = "Option<String>",
+            description = "The ETag of an earlier answer. While the answer is the same, it is 304 with no body."
+        ),
+        response_header(
+            name = "ETag",
+            ty = "Option<String>",
+            description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
+        )
+    )]
     async fn list_prices(
         &self,
         model: Query<Option<String>>,

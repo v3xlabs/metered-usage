@@ -2,7 +2,7 @@ use tokio::sync::{Mutex, broadcast};
 
 use crate::config::Config;
 use crate::database::Database;
-use crate::http::auth::Token;
+use crate::http::auth::Credentials;
 use crate::usage::UsageUpdate;
 
 /// How many committed events a slow stream subscriber may fall behind before it is cut
@@ -12,9 +12,7 @@ const USAGE_BACKLOG: usize = 1024;
 /// Everything a request handler needs.
 pub struct AppState {
     pub database: Database,
-    pub token: Token,
-    /// Admits `GET` under the API only. Absent, only `token` admits.
-    pub read_token: Option<Token>,
+    pub credentials: Credentials,
     pub config: Config,
     /// Every event ingest committed, in commit order per batch, and every cost a price
     /// fill committed afterwards.
@@ -29,14 +27,12 @@ impl AppState {
     /// would answer with a panic instead.
     pub fn new(
         database: Database,
-        token: Token,
-        read_token: Option<Token>,
+        credentials: Credentials,
         config: Config,
     ) -> Result<Self, reqwest::Error> {
         Ok(Self {
             database,
-            token,
-            read_token,
+            credentials,
             config,
             usage: broadcast::channel(USAGE_BACKLOG).0,
             http: reqwest::Client::builder().build()?,

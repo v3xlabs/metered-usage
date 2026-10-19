@@ -262,7 +262,7 @@ async fn service(
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
     let token = Token::try_from(TEST_ACCESS_TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, None, config)?);
+    let state = Arc::new(AppState::new(database, token.into(), config)?);
 
     Ok(TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TEST_ACCESS_TOKEN}")))
@@ -295,6 +295,12 @@ async fn refreshed(client: &TestClient<impl poem::Endpoint>) -> (String, String)
         account_id(&refreshed, "codex"),
         account_id(&refreshed, "claude"),
     )
+}
+
+async fn changes(client: &TestClient<impl poem::Endpoint>, query: &str) -> Value {
+    let response = client.get(format!("/api/events?{query}")).send().await;
+    response.assert_status_is_ok();
+    response.json().await.value().deserialize::<Value>()
 }
 
 async fn listed(client: &TestClient<impl poem::Endpoint>) -> Value {
@@ -457,6 +463,7 @@ async fn a_spent_reset_whose_refresh_fails_answers_failed_and_is_not_offered_aga
     let client = service(&upstream).await.expect("a service");
     let (codex, _) = refreshed(&client).await;
     upstream.with(|state| state.usage_fails_after_reset = true);
+    let before = changes(&client, "").await;
 
     let (status, spent) = reset(&client, &codex).await;
     assert_eq!(status, StatusCode::OK, "{spent}");
@@ -466,6 +473,22 @@ async fn a_spent_reset_whose_refresh_fails_answers_failed_and_is_not_offered_aga
     assert_eq!(account["hard_refresh_error"], "the provider answered 503");
     assert_eq!(account["manual_resets"], json!([]));
     assert_eq!(account["windows"][0]["used_fraction"], 1.0);
+    // The spent reset is a change of its own, committed before the provider is asked; the
+    // failed refresh changes the account and leaves its window as it was.
+    let after = changes(&client, &format!("cursor={}&timeout=0", before["cursor"])).await;
+    let named = after["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|change| (change["kind"].clone(), change["account_id"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        named,
+        [
+            (json!("reset.updated"), json!(codex)),
+            (json!("account.changed"), json!(codex)),
+        ]
+    );
 
     let (status, refused) = reset(&client, &codex).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");

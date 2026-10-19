@@ -264,7 +264,7 @@ async fn harness() -> Result<Harness<impl Endpoint>, Failure> {
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
     let token = Token::try_from(TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token, None, config)?);
+    let state = Arc::new(AppState::new(database, token.into(), config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
 

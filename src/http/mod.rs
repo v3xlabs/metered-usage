@@ -1,6 +1,7 @@
 pub mod api;
 pub mod assets;
 pub mod auth;
+pub mod conditional;
 pub mod mcp;
 
 use std::sync::Arc;
@@ -10,9 +11,10 @@ use poem_openapi::OpenApiService;
 
 use crate::app::AppState;
 use crate::http::api::{
-    account, analytics, dead_letter, health, leverage, plan, price, quota, session, source, usage,
+    account, analytics, change, dead_letter, health, leverage, plan, price, quota, session, source,
+    usage,
 };
-use crate::http::auth::RequireCredential;
+use crate::http::auth::{Credentials, RequireCredential};
 
 const TITLE: &str = "metered-usage";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -30,6 +32,7 @@ type Apis = (
     plan::PlanApi,
     leverage::LeverageApi,
     quota::QuotaApi,
+    change::ChangeApi,
 );
 
 pub fn service(state: &Arc<AppState>) -> OpenApiService<Apis, ()> {
@@ -66,6 +69,9 @@ pub fn service(state: &Arc<AppState>) -> OpenApiService<Apis, ()> {
                 state: Arc::clone(state),
             },
             quota::QuotaApi::new(Arc::clone(state)),
+            change::ChangeApi {
+                state: Arc::clone(state),
+            },
         ),
         TITLE,
         VERSION,
@@ -86,8 +92,7 @@ pub fn routes(state: &Arc<AppState>) -> impl Endpoint<Output = poem::Response> +
         .nest(
             MOUNT,
             api.with(RequireCredential {
-                token: state.token.clone(),
-                read_token: state.read_token.clone(),
+                credentials: state.credentials.clone(),
             }),
         )
         .at(
@@ -95,8 +100,7 @@ pub fn routes(state: &Arc<AppState>) -> impl Endpoint<Output = poem::Response> +
             mcp::endpoint(Arc::clone(state))
                 .into_endpoint()
                 .with(RequireCredential {
-                    token: state.token.clone(),
-                    read_token: None,
+                    credentials: Credentials::from(state.credentials.token.clone()),
                 }),
         )
         .at("/openapi.json", document)
