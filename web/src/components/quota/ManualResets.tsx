@@ -2,7 +2,7 @@ import { Popover } from "@kobalte/core/popover";
 import { TbOutlineRotateClockwise } from "solid-icons/tb";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
-import type { QuotaAccount, QuotaRefresh } from "../../api/quota";
+import type { ManualReset, QuotaAccount, QuotaRefresh } from "../../api/quota";
 import { fetchQuota, resetQuota } from "../../api/quota";
 import { accountLabel } from "../../domain/account";
 import { redact } from "../../domain/privacy";
@@ -18,6 +18,8 @@ const MINUTE_MS = 60_000;
 const FOCUS = "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500";
 
 type ResetStep = { kind: "list"; } | { kind: "confirm"; } | { kind: "pending"; } | { kind: "failed"; message: string; };
+
+const expiryMs = (grant: ManualReset): number => (grant.expires_at === undefined ? Infinity : Date.parse(grant.expires_at));
 
 const relativeExpiry = (expiresAt: string, nowMs: number): string => {
   const remainingMs = Date.parse(expiresAt) - nowMs;
@@ -41,8 +43,10 @@ export const ManualResets = (properties: {
   const [isOpen, setIsOpen] = createSignal(false);
   const [step, setStep] = createSignal<ResetStep>({ kind: "list" });
   const available = createMemo(() => properties.entry.manual_resets
-    .filter(reset => Date.parse(reset.expires_at) > properties.nowMs)
-    .toSorted((left, right) => Date.parse(left.expires_at) - Date.parse(right.expires_at)));
+    .filter(grant => expiryMs(grant) > properties.nowMs)
+    .toSorted((left, right) => expiryMs(left) - expiryMs(right)));
+  const count = createMemo(() => available().reduce((sum, grant) => sum + grant.remaining, 0));
+  const isSpendable = createMemo(() => available().some(grant => grant.spendable));
   const isPending = createMemo(() => step().kind === "pending");
   let cancel: HTMLButtonElement | undefined;
   const failureMessage = createMemo(() => {
@@ -68,7 +72,7 @@ export const ManualResets = (properties: {
   };
 
   const reset = async (): Promise<void> => {
-    if (step().kind !== "confirm" || properties.isBlocked || available().length === 0) return;
+    if (step().kind !== "confirm" || properties.isBlocked || !isSpendable()) return;
 
     setStep({ kind: "pending" });
     properties.onPending(true);
@@ -101,15 +105,15 @@ export const ManualResets = (properties: {
       placement="bottom-start"
       gutter={8}
     >
-      <Popover.Anchor as="span" class={available().length > 0 || isOpen() ? "inline-flex" : "hidden"}>
-        <Show when={available().length > 0}>
+      <Popover.Anchor as="span" class={count() > 0 || isOpen() ? "inline-flex" : "hidden"}>
+        <Show when={count() > 0}>
           <Popover.Trigger
-            aria-label={`${available().length} manual quota ${available().length === 1 ? "reset" : "resets"} available for ${accountLabel(properties.entry.account)}`}
+            aria-label={`${count()} manual quota ${count() === 1 ? "reset" : "resets"} available for ${accountLabel(properties.entry.account)}`}
             title="Manual quota resets"
             class={["-my-1 flex min-h-7 items-center gap-1 rounded-control px-1 text-xs text-slate-600 hover:bg-raised hover:text-slate-900 data-expanded:bg-raised dark:text-slate-400 dark:hover:text-slate-100", FOCUS]}
           >
             <TbOutlineRotateClockwise size={14} aria-hidden="true" />
-            <span>{`${available().length} ${available().length === 1 ? "reset" : "resets"}`}</span>
+            <span>{`${count()} ${count() === 1 ? "reset" : "resets"}`}</span>
           </Popover.Trigger>
         </Show>
       </Popover.Anchor>
@@ -117,7 +121,7 @@ export const ManualResets = (properties: {
         <Popover.Content
           aria-busy={isPending() ? "true" : "false"}
           onCloseAutoFocus={(event) => {
-            if (available().length > 0) return;
+            if (count() > 0) return;
 
             event.preventDefault();
             properties.onFocusFallback();
@@ -163,7 +167,7 @@ export const ManualResets = (properties: {
                     <button
                       type="button"
                       class={[DANGER_BUTTON, FOCUS]}
-                      disabled={isPending() || properties.isBlocked || available().length === 0}
+                      disabled={isPending() || properties.isBlocked || !isSpendable()}
                       onClick={() => void reset()}
                     >
                       {isPending() ? "Resetting..." : "Confirm reset"}
@@ -176,30 +180,49 @@ export const ManualResets = (properties: {
             <p class="text-xs text-slate-600 dark:text-slate-400">{`Available resets, expiry in ${EXPIRY.resolvedOptions().timeZone}.`}</p>
             <ol class="space-y-2">
               <For each={available()}>
-                {(reset, index) => (
+                {(grant, index) => (
                   <li class="flex items-start justify-between gap-3 text-xs">
-                    <span class="shrink-0 text-slate-600 dark:text-slate-400">{`Reset ${index() + 1}`}</span>
-                    <span class="text-right tabular-nums">
-                      <time datetime={reset.expires_at} class="block text-slate-900 dark:text-slate-100">{EXPIRY.format(new Date(reset.expires_at))}</time>
-                      <span class="text-slate-600 dark:text-slate-400">{relativeExpiry(reset.expires_at, properties.nowMs)}</span>
+                    <span class="min-w-0 wrap-break-word text-slate-600 dark:text-slate-400">
+                      {grant.label ?? `Reset ${index() + 1}`}
+                      <Show when={grant.total}>
+                        {total => <span class="block tabular-nums">{`${grant.remaining} / ${total()} resets remaining`}</span>}
+                      </Show>
+                    </span>
+                    <span class="shrink-0 text-right tabular-nums">
+                      <Show
+                        when={grant.expires_at}
+                        fallback={<span class="text-slate-600 dark:text-slate-400">Expiry unknown</span>}
+                      >
+                        {expiresAt => (
+                          <>
+                            <time datetime={expiresAt()} class="block text-slate-900 dark:text-slate-100">{EXPIRY.format(new Date(expiresAt()))}</time>
+                            <span class="text-slate-600 dark:text-slate-400">{relativeExpiry(expiresAt(), properties.nowMs)}</span>
+                          </>
+                        )}
+                      </Show>
                     </span>
                   </li>
                 )}
               </For>
             </ol>
-            <Show when={available().length === 0}>
+            <Show when={count() === 0}>
               <p role="status" class="text-xs text-slate-600 dark:text-slate-400">No manual resets remain.</p>
+            </Show>
+            <Show when={count() > 0 && !isSpendable()}>
+              <p class="text-xs text-slate-600 dark:text-slate-400">These resets can't be used here.</p>
             </Show>
             <div class="flex justify-end gap-2">
               <Popover.CloseButton class={[BUTTON, FOCUS]}>Close</Popover.CloseButton>
-              <button
-                type="button"
-                class={[BUTTON, FOCUS]}
-                disabled={properties.isBlocked || available().length === 0}
-                onClick={() => setStep({ kind: "confirm" })}
-              >
-                Reset quota
-              </button>
+              <Show when={isSpendable()}>
+                <button
+                  type="button"
+                  class={[BUTTON, FOCUS]}
+                  disabled={properties.isBlocked}
+                  onClick={() => setStep({ kind: "confirm" })}
+                >
+                  Reset quota
+                </button>
+              </Show>
             </div>
           </Show>
         </Popover.Content>

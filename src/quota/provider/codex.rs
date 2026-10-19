@@ -2,6 +2,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::quota::management::{ApiCall, AuthFile, Management};
+use crate::quota::manual_reset::Grant;
 use crate::quota::provider::{
     ManualResets, Observation, RefreshError, after_seconds, answer, entry_records, field, instant,
     integer, number, slug, text, used_from_percent,
@@ -126,12 +127,12 @@ async fn manual_resets(
         .await
         .map_err(RefreshError::from)
         .and_then(answer)
-        .and_then(|listed| expiries(&listed).ok_or(RefreshError::Unreadable))
+        .and_then(|listed| grants(&listed).ok_or(RefreshError::Unreadable))
         .inspect_err(|error| tracing::warn!(%error, "the Codex manual reset list was not read"))
         .map_or(ManualResets::Unchanged, ManualResets::Reported)
 }
 
-fn expiries(listed: &Value) -> Option<Vec<Timestamp>> {
+fn grants(listed: &Value) -> Option<Vec<Grant>> {
     if !listed.is_object() || !RESET_LIST_KEYS.iter().any(|key| listed.get(key).is_some()) {
         return None;
     }
@@ -153,6 +154,12 @@ fn expiries(listed: &Value) -> Option<Vec<Timestamp>> {
                     .is_some_and(|status| status == "available")
             })
             .filter_map(|credit| field(credit, &["expires_at", "expiresAt"]).and_then(instant))
+            .map(|expires_at| Grant {
+                label: None,
+                remaining: 1,
+                total: None,
+                expires_at: Some(expires_at.into()),
+            })
             .collect(),
     )
 }
@@ -398,20 +405,27 @@ mod tests {
             ],
         });
 
+        let grant = |at: Timestamp| Grant {
+            label: None,
+            remaining: 1,
+            total: None,
+            expires_at: Some(at.into()),
+        };
+
         assert_eq!(
-            expiries(&listed),
+            grants(&listed),
             Some(vec![
-                "2026-11-01T00:00:00Z".parse().expect("an instant"),
-                Timestamp::from_second(1_793_000_000).expect("an instant"),
+                grant("2026-11-01T00:00:00Z".parse().expect("an instant")),
+                grant(Timestamp::from_second(1_793_000_000).expect("an instant")),
             ])
         );
     }
 
     #[test]
     fn an_answer_that_is_not_a_reset_list_is_not_read_as_no_resets() {
-        assert_eq!(expiries(&json!({ "detail": "Not Found" })), None);
-        assert_eq!(expiries(&json!([])), None);
-        assert_eq!(expiries(&json!({ "available_count": 0 })), Some(Vec::new()));
+        assert_eq!(grants(&json!({ "detail": "Not Found" })), None);
+        assert_eq!(grants(&json!([])), None);
+        assert_eq!(grants(&json!({ "available_count": 0 })), Some(Vec::new()));
     }
 
     #[test]

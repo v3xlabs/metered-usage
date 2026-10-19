@@ -11,7 +11,8 @@ use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
 use crate::quota::management::AuthFile;
-use crate::quota::manual_reset::Credit;
+use crate::quota::manual_reset::{Credit, Grant};
+use crate::quota::provider::Provider;
 use crate::quota::window::QuotaWindow;
 use crate::source::Source;
 
@@ -57,7 +58,7 @@ pub struct QuotaAccount {
     #[sqlx(skip)]
     pub windows: Vec<QuotaWindow>,
     #[sqlx(skip)]
-    pub manual_resets: Vec<Timestamp>,
+    pub manual_resets: Vec<Grant>,
 }
 
 impl QuotaAccount {
@@ -84,12 +85,12 @@ impl QuotaAccount {
             .await?
             .into_iter()
             .fold(
-                HashMap::<Id<Account>, Vec<Timestamp>>::new(),
-                |mut grouped, reset| {
+                HashMap::<Id<Account>, Vec<Grant>>::new(),
+                |mut grouped, credit| {
                     grouped
-                        .entry(reset.account_id)
+                        .entry(credit.account_id)
                         .or_default()
-                        .push(reset.expires_at);
+                        .push(credit.grant);
                     grouped
                 },
             );
@@ -101,6 +102,16 @@ impl QuotaAccount {
         }
 
         Ok(accounts)
+    }
+
+    /// Whether the provider's manual resets can be spent through `POST /quota/reset`. A
+    /// disabled or removed credential is still refused there.
+    #[must_use]
+    pub fn spends_manual_resets(&self) -> bool {
+        self.account
+            .provider
+            .parse::<Provider>()
+            .is_ok_and(Provider::spends_manual_resets)
     }
 
     /// Writes what the credential list said. The plan is kept when the list names none,

@@ -7,6 +7,7 @@ export type QuotaWindow = components["schemas"]["QuotaWindow"];
 export type QuotaPrediction = components["schemas"]["QuotaPrediction"];
 export type QuotaCalibration = components["schemas"]["QuotaCalibration"];
 export type Cooldown = components["schemas"]["Cooldown"];
+export type ManualReset = components["schemas"]["ManualReset"];
 export type QuotaRefresh = components["schemas"]["QuotaRefresh"];
 
 export const fetchQuota = async (): Promise<Result<readonly QuotaAccount[]>> =>

@@ -18,6 +18,10 @@ const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CONSUME_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_RESET_GRANTS_URL: &str =
+    "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1";
+const CODEX_RECORDED: &str = include_str!("fixtures/codex_reset_credits.json");
+const CLAUDE_RECORDED: &str = include_str!("fixtures/claude_reset_grants.json");
 const COOLDOWN_RESET: &str = "reset-quota";
 const EXPIRED: &str = "2020-01-01T00:00:00Z";
 const SOONEST: &str = "2099-01-01T00:00:00Z";
@@ -42,6 +46,9 @@ struct State {
     consumed: bool,
     usage_fails_after_reset: bool,
     credits_fail: bool,
+    credits_recorded: Option<Value>,
+    claude_grants: Option<Value>,
+    claude_usage_status: u16,
     codex: Listed,
 }
 
@@ -56,6 +63,9 @@ impl Upstream {
             consumed: false,
             usage_fails_after_reset: false,
             credits_fail: false,
+            credits_recorded: None,
+            claude_grants: None,
+            claude_usage_status: 200,
             codex: Listed::Enabled,
         })))
     }
@@ -128,7 +138,13 @@ impl Upstream {
                     )
                 }
                 RESET_CREDITS_URL if state.credits_fail => (500, json!({ "error": "down" })),
-                RESET_CREDITS_URL => (200, reset_credits(&state.credits)),
+                RESET_CREDITS_URL => (
+                    200,
+                    state
+                        .credits_recorded
+                        .clone()
+                        .unwrap_or_else(|| reset_credits(&state.credits)),
+                ),
                 CONSUME_URL => {
                     state.consumed = true;
                     if let Some(expires_at) = state
@@ -142,10 +158,17 @@ impl Upstream {
                     }
                     state.consume_response.clone()
                 }
+                CLAUDE_USAGE_URL if state.claude_usage_status != 200 => {
+                    (state.claude_usage_status, json!({ "error": "overloaded" }))
+                }
                 CLAUDE_USAGE_URL => (
                     200,
                     json!({ "five_hour": { "utilization": 10, "resets_at": SOONEST } }),
                 ),
+                CLAUDE_RESET_GRANTS_URL => match &state.claude_grants {
+                    Some(grants) => (200, grants.clone()),
+                    None => (429, json!({ "error": "rate_limited" })),
+                },
                 _ => (401, json!({ "error": "unauthorized" })),
             }
         })
@@ -539,6 +562,108 @@ async fn concurrent_resets_cannot_consume_two_credits_after_an_unknown_outcome()
     assert!(expiries(by_provider(&listed(&client).await, "codex")).is_empty());
 }
 
+/// The recorded answers, moved into the future so they stay unexpired.
+fn recorded() -> Result<(Value, Value), serde_json::Error> {
+    let mut codex = serde_json::from_str::<Value>(CODEX_RECORDED)?;
+    codex["credits"][0]["expires_at"] = json!(SOONEST);
+    codex["credits"][1]["expires_at"] = json!(LATEST);
+    let mut claude = serde_json::from_str::<Value>(CLAUDE_RECORDED)?;
+    claude["cedar_ember"]["grants"][0]["ends_at"] = json!(SOONEST);
+
+    Ok((codex, claude))
+}
+
+#[tokio::test]
+async fn recorded_reset_lists_of_both_providers_list_as_grants() {
+    let upstream = Upstream::new();
+    let (codex_credits, claude_grants) = recorded().expect("the fixtures are JSON");
+    upstream.with(|state| {
+        state.credits_recorded = Some(codex_credits);
+        state.claude_grants = Some(claude_grants.clone());
+    });
+    let client = service(&upstream).await.expect("a service");
+    let (_, claude) = refreshed(&client).await;
+
+    let listed = listed(&client).await;
+    assert_eq!(
+        by_provider(&listed, "codex")["manual_resets"],
+        json!([
+            { "remaining": 1, "expires_at": SOONEST, "spendable": true },
+            { "remaining": 1, "expires_at": LATEST, "spendable": true },
+        ])
+    );
+    let claude_resets = json!([
+        {
+            "label": "Claude Opus 5.5 launch: one usage-limit reset for Pro and Max",
+            "remaining": 1,
+            "total": 1,
+            "expires_at": SOONEST,
+            "spendable": false,
+        },
+        { "label": "Max loyalty resets", "remaining": 2, "total": 3, "spendable": false },
+    ]);
+    assert_eq!(
+        by_provider(&listed, "claude")["manual_resets"],
+        claude_resets
+    );
+
+    let reads = upstream.sent(CLAUDE_RESET_GRANTS_URL);
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0]["authIndex"], "a1");
+    assert_eq!(reads[0]["method"], "GET");
+    assert_eq!(
+        reads[0]["header"],
+        json!({
+            "User-Agent": "claude-cli/2.1.280 (external, cli)",
+            "Authorization": "Bearer $TOKEN$",
+            "Content-Type": "application/json",
+            "anthropic-beta": "oauth-2025-04-20",
+        })
+    );
+
+    upstream.with(|state| state.claude_grants = None);
+    let (status, again) = send(&client, "/api/quota/refresh", &json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["failed"], 0);
+    let account = by_provider(&again, "claude");
+    assert_eq!(account["manual_resets"], claude_resets);
+    assert_eq!(account["windows"][0]["used_fraction"], 0.1);
+
+    let calls = upstream.with(|state| state.calls.len());
+    let (status, refused) = reset(&client, &claude).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        upstream.with(|state| state.calls.len()),
+        calls,
+        "a Claude reset reached the provider"
+    );
+
+    upstream.with(|state| state.claude_usage_status = 503);
+    let reads = upstream.sent(CLAUDE_RESET_GRANTS_URL).len();
+    let (status, failed) = send(&client, "/api/quota/refresh", &json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{failed}");
+    assert_eq!(failed["failed"], 1);
+    assert_eq!(
+        upstream.sent(CLAUDE_RESET_GRANTS_URL).len(),
+        reads,
+        "the grants were read although the usage read failed"
+    );
+    upstream.with(|state| state.claude_usage_status = 200);
+
+    let mut used_up = claude_grants;
+    for grant in used_up["cedar_ember"]["grants"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        grant["resets_left"] = json!(0);
+    }
+    upstream.with(|state| state.claude_grants = Some(used_up));
+    let (status, cleared) = send(&client, "/api/quota/refresh", &json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(by_provider(&cleared, "claude")["manual_resets"], json!([]));
+}
+
 #[tokio::test]
 async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() {
     let upstream = Upstream::new();
@@ -575,6 +700,11 @@ async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() 
         status,
         StatusCode::BAD_REQUEST,
         "a disabled credential: {refused}"
+    );
+    assert_eq!(
+        by_provider(&listed(&client).await, "codex")["manual_resets"][0]["spendable"],
+        true,
+        "a disabled Codex credential lost its reset action"
     );
     upstream.with(|state| state.codex = Listed::Removed);
     let (status, refused) = reset(&client, &codex).await;

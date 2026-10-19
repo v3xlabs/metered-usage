@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use jiff::Timestamp;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
@@ -11,7 +10,7 @@ use crate::http::api::account::AccountSummaryOutput;
 use crate::prelude::*;
 use crate::quota::calibration::{Calibration, Outlier};
 use crate::quota::credential::{Cooldown, QuotaAccount};
-use crate::quota::manual_reset::ResetRequestError;
+use crate::quota::manual_reset::{Grant, ResetRequestError};
 use crate::quota::prediction::Prediction;
 use crate::quota::window::QuotaWindow;
 use crate::quota::{RefreshRequestError, SourceFailure};
@@ -137,9 +136,9 @@ impl QuotaApi {
     /// Spends one manual reset the provider granted the account, then clears CLIProxy's
     /// cooldowns on it and hard refreshes it, as the official management UI does. Only an
     /// explicit `confirmed: true` spends one, and a failed request is never retried here.
-    /// A credential CLIProxy no longer lists, a disabled one, a provider without manual
-    /// resets and an account without an unexpired one are refused before the provider is
-    /// asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
+    /// A credential CLIProxy no longer lists, a disabled one, a provider whose resets cannot
+    /// be spent here and an account without an unexpired one are refused before the provider
+    /// is asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
     /// the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
     /// and `manual_resets` stays empty until a provider list is read successfully. Stored
     /// resets are cleared before the consuming request, so an unknown outcome also blocks
@@ -322,18 +321,32 @@ impl From<Cooldown> for CooldownOutput {
     }
 }
 
-/// A manual quota reset the provider granted the credential and has not seen spent.
+/// A manual quota reset grant the provider reported, with at least one reset left. A Codex
+/// credit is one reset with no label or total.
 #[derive(Debug, Object)]
-#[oai(rename = "ManualReset")]
+#[oai(rename = "ManualReset", skip_serializing_if_is_none)]
 pub struct ManualResetOutput {
-    /// RFC 3339; the reset is no longer offered from this instant.
-    expires_at: String,
+    /// The provider's name for the grant, such as a promotion.
+    label: Option<String>,
+    /// Resets left in the grant; at least 1.
+    remaining: i64,
+    /// Resets the grant started with, when the provider states it.
+    total: Option<i64>,
+    /// RFC 3339. The grant expires at this time. Absent if the provider gives no expiry date.
+    expires_at: Option<String>,
+    /// Whether the provider's grants can be spent through `POST /quota/reset`. Claude grants
+    /// are listed but cannot be spent here, and a disabled or removed credential is refused.
+    spendable: bool,
 }
 
-impl From<Timestamp> for ManualResetOutput {
-    fn from(expires_at: Timestamp) -> Self {
+impl ManualResetOutput {
+    fn new(grant: Grant, spendable: bool) -> Self {
         Self {
-            expires_at: expires_at.to_string(),
+            label: grant.label,
+            remaining: grant.remaining,
+            total: grant.total,
+            expires_at: grant.expires_at.map(|at| at.0.to_string()),
+            spendable,
         }
     }
 }
@@ -367,14 +380,15 @@ pub struct QuotaAccountOutput {
     /// When the last request charged to the credential happened.
     last_used_at: Option<String>,
     windows: Vec<QuotaWindowOutput>,
-    /// Every unexpired manual reset, soonest expiry first. Empty for a provider that grants
-    /// none or whose list is unknown, including after a consuming request until a hard
-    /// refresh successfully reads the provider's list again.
+    /// Every manual reset grant that has not expired, soonest expiry first. Grants with no
+    /// expiry date come last. Empty if the provider grants none or its list is not known, and
+    /// after a reset is spent until a hard refresh reads the list from the provider again.
     manual_resets: Vec<ManualResetOutput>,
 }
 
 impl From<QuotaAccount> for QuotaAccountOutput {
     fn from(account: QuotaAccount) -> Self {
+        let spendable = account.spends_manual_resets();
         Self {
             account: account.account.into(),
             status: account.status,
@@ -392,7 +406,11 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             removed_at: account.removed_at.map(|at| at.0.to_string()),
             last_used_at: account.last_used_at.map(|at| at.0.to_string()),
             windows: account.windows.into_iter().map(Into::into).collect(),
-            manual_resets: account.manual_resets.into_iter().map(Into::into).collect(),
+            manual_resets: account
+                .manual_resets
+                .into_iter()
+                .map(|grant| ManualResetOutput::new(grant, spendable))
+                .collect(),
         }
     }
 }

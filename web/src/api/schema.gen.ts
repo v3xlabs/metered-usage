@@ -533,9 +533,9 @@ export interface paths {
          * Spends one manual reset the provider granted the account, then clears CLIProxy's
          *     cooldowns on it and hard refreshes it, as the official management UI does. Only an
          *     explicit `confirmed: true` spends one, and a failed request is never retried here.
-         *     A credential CLIProxy no longer lists, a disabled one, a provider without manual
-         *     resets and an account without an unexpired one are refused before the provider is
-         *     asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
+         *     A credential CLIProxy no longer lists, a disabled one, a provider whose resets cannot
+         *     be spent here and an account without an unexpired one are refused before the provider
+         *     is asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
          *     the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
          *     and `manual_resets` stays empty until a provider list is read successfully. Stored
          *     resets are cleared before the consuming request, so an unknown outcome also blocks
@@ -782,11 +782,29 @@ export interface components {
         };
         /**
          * ManualReset
-         * @description A manual quota reset the provider granted the credential and has not seen spent.
+         * @description A manual quota reset grant the provider reported, with at least one reset left. A Codex
+         *     credit is one reset with no label or total.
          */
         ManualReset: {
-            /** @description RFC 3339; the reset is no longer offered from this instant. */
-            expires_at: string;
+            /** @description The provider's name for the grant, such as a promotion. */
+            label?: string;
+            /**
+             * Format: int64
+             * @description Resets left in the grant; at least 1.
+             */
+            remaining: number;
+            /**
+             * Format: int64
+             * @description Resets the grant started with, when the provider states it.
+             */
+            total?: number;
+            /** @description RFC 3339. The grant expires at this time. Absent if the provider gives no expiry date. */
+            expires_at?: string;
+            /**
+             * @description Whether the provider's grants can be spent through `POST /quota/reset`. Claude grants
+             *     are listed but cannot be spent here, and a disabled or removed credential is refused.
+             */
+            spendable: boolean;
         };
         /** MergeInput */
         MergeInput: {
@@ -933,9 +951,9 @@ export interface components {
             last_used_at?: string;
             windows: components["schemas"]["QuotaWindow"][];
             /**
-             * @description Every unexpired manual reset, soonest expiry first. Empty for a provider that grants
-             *     none or whose list is unknown, including after a consuming request until a hard
-             *     refresh successfully reads the provider's list again.
+             * @description Every manual reset grant that has not expired, soonest expiry first. Grants with no
+             *     expiry date come last. Empty if the provider grants none or its list is not known, and
+             *     after a reset is spent until a hard refresh reads the list from the provider again.
              */
             manual_resets: components["schemas"]["ManualReset"][];
         };

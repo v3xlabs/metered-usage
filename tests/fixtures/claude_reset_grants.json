@@ -1,0 +1,71 @@
+{
+    "five_hour": {
+        "utilization": 100.0,
+        "resets_at": "2026-10-19T14:00:00.142857+00:00"
+    },
+    "seven_day": {
+        "utilization": 63.0,
+        "resets_at": "2026-10-23T07:00:00.142857+00:00"
+    },
+    "seven_day_oauth_apps": null,
+    "seven_day_opus": null,
+    "seven_day_sonnet": {
+        "utilization": 12.0,
+        "resets_at": "2026-10-23T07:00:00.142857+00:00"
+    },
+    "extra_usage": {
+        "is_enabled": false,
+        "monthly_limit": null,
+        "used_credits": null,
+        "utilization": null
+    },
+    "cedar_ember": {
+        "eligible": true,
+        "ineligible_reason": null,
+        "at_limit": true,
+        "grants": [
+            {
+                "id": "opus_5_5_launch",
+                "label": "Claude Opus 5.5 launch: one usage-limit reset for Pro and Max",
+                "resets_total": 1,
+                "resets_left": 1,
+                "starts_at": "2026-10-15T16:00:00Z",
+                "ends_at": "2026-10-22T16:00:00Z",
+                "clears": ["five_hour", "seven_day"],
+                "paused": false,
+                "usable_now": true,
+                "use_requires_limit": true,
+                "percent_used": { "five_hour": 100, "seven_day": 63 }
+            },
+            {
+                "id": "welcome_back",
+                "label": "Welcome back",
+                "resets_total": 2,
+                "resets_left": 0,
+                "starts_at": "2026-09-01T00:00:00Z",
+                "ends_at": "2026-12-01T00:00:00Z",
+                "clears": ["five_hour"],
+                "paused": false,
+                "usable_now": false,
+                "use_requires_limit": true,
+                "percent_used": {}
+            },
+            {
+                "id": "max_loyalty",
+                "label": "Max loyalty resets",
+                "resets_total": 3,
+                "resets_left": 2,
+                "starts_at": "2026-10-01T00:00:00Z",
+                "ends_at": null,
+                "clears": ["five_hour"],
+                "paused": false,
+                "usable_now": true,
+                "use_requires_limit": true,
+                "percent_used": { "five_hour": 100 }
+            }
+        ],
+        "next_grant_id": "opus_5_5_launch",
+        "weekly_resets_at": "2026-10-23T07:00:00Z",
+        "cooldown_until": null
+    }
+}

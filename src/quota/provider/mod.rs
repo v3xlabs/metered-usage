@@ -16,6 +16,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 
 use crate::quota::management::{ApiResponse, AuthFile, Management, ManagementError};
+use crate::quota::manual_reset::Grant;
 use crate::quota::window::NewWindow;
 
 const PERCENT: f64 = 100.0;
@@ -67,9 +68,15 @@ impl Provider {
         }
     }
 
+    /// Whether this adapter can spend a manual reset; Claude grants are only listed.
+    #[must_use]
+    pub fn spends_manual_resets(self) -> bool {
+        self == Self::Codex
+    }
+
     #[must_use]
     pub fn can_reset(self, file: &AuthFile) -> bool {
-        self == Self::Codex && self.can_refresh(file)
+        self.spends_manual_resets() && self.can_refresh(file)
     }
 
     /// Spends one manual reset. Sent once: the provider cannot tell a repeated request
@@ -117,7 +124,7 @@ impl FromStr for Provider {
 pub enum ManualResets {
     #[default]
     Unchanged,
-    Reported(Vec<Timestamp>),
+    Reported(Vec<Grant>),
 }
 
 /// What one hard refresh learned about a credential.
@@ -147,7 +154,7 @@ pub enum RefreshError {
     InvalidCredentialFile,
     #[error("the credential file has no dca_token")]
     MissingDcaToken,
-    #[error("the provider grants no manual reset")]
+    #[error("the provider's manual resets cannot be spent here")]
     NoManualReset,
     #[error("the provider did not confirm the manual reset")]
     ResetNotConfirmed,

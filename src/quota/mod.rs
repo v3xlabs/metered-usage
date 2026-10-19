@@ -307,8 +307,8 @@ async fn record(
     match result {
         Ok(observation) => {
             QuotaWindow::replace(&mut transaction, account_id, &observation.windows, at).await?;
-            if let provider::ManualResets::Reported(expiries) = &observation.manual_resets {
-                Credit::replace(&mut transaction, account_id, expiries).await?;
+            if let provider::ManualResets::Reported(grants) = &observation.manual_resets {
+                Credit::replace(&mut transaction, account_id, grants).await?;
             }
             QuotaAccount::refreshed(
                 &mut transaction,

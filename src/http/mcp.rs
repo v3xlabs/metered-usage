@@ -249,8 +249,9 @@ struct QuotaStatusOutput {
 
 /// A CLIProxy credential's last known health and quota. `next_retry_after` is CLIProxy's
 /// scheduling decision, not the provider's reset; a window's `resets_at` is the provider's.
-/// `manual_resets` lists every unexpired manual reset the provider granted, soonest expiry
-/// first; spending one needs the HTTP API's explicit confirmation.
+/// `manual_resets` lists every unexpired manual reset grant the provider reported, soonest
+/// expiry first and grants with no expiry date last. Only Codex grants can be spent, and
+/// spending one needs explicit confirmation through the HTTP API.
 #[derive(Debug, Serialize, JsonSchema)]
 struct QuotaAccountOutput {
     account: AccountSummaryOutput,
@@ -315,8 +316,11 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             manual_resets: account
                 .manual_resets
                 .into_iter()
-                .map(|expires_at| ManualResetOutput {
-                    expires_at: expires_at.to_string(),
+                .map(|grant| ManualResetOutput {
+                    label: grant.label,
+                    remaining: grant.remaining,
+                    total: grant.total,
+                    expires_at: grant.expires_at.map(|at| at.0.to_string()),
                 })
                 .collect(),
         }
@@ -346,10 +350,14 @@ struct QuotaWindowOutput {
     observed_at: String,
 }
 
-/// `expires_at` is RFC 3339.
+/// `remaining` is the resets left. `total` is the resets the grant started with, if the
+/// provider states it. `expires_at` is RFC 3339, absent if the provider gives no expiry date.
 #[derive(Debug, Serialize, JsonSchema)]
 struct ManualResetOutput {
-    expires_at: String,
+    label: Option<String>,
+    remaining: i64,
+    total: Option<i64>,
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

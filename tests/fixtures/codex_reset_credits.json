@@ -1,0 +1,27 @@
+{
+    "available_count": 2,
+    "applicable_available_count": 2,
+    "credits": [
+        {
+            "id": "rlrc_6f1d0c2a",
+            "reset_type": "codex_rate_limits",
+            "status": "available",
+            "granted_at": "2026-10-01T09:00:00Z",
+            "expires_at": "2026-10-31T09:00:00Z"
+        },
+        {
+            "id": "rlrc_9a4e7b13",
+            "reset_type": "codex_rate_limits",
+            "status": "available",
+            "granted_at": "2026-10-15T09:00:00Z",
+            "expires_at": "2026-11-14T09:00:00Z"
+        },
+        {
+            "id": "rlrc_2c8f5d90",
+            "reset_type": "codex_rate_limits",
+            "status": "redeemed",
+            "granted_at": "2026-09-01T09:00:00Z",
+            "expires_at": "2026-10-01T09:00:00Z"
+        }
+    ]
+}

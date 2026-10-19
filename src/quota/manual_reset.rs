@@ -9,24 +9,39 @@ use crate::quota::management::Management;
 use crate::quota::provider::RefreshError;
 use crate::quota::{Refresh, SourceFailure, record, sources, store};
 
+/// A manual reset grant the provider reported, with at least one reset left. A Codex credit
+/// is one reset with no label or total; a Claude grant holds `remaining` of `total` resets
+/// under its label. `expires_at` is absent when the provider gives no expiry date.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct Grant {
+    pub label: Option<String>,
+    pub remaining: i64,
+    pub total: Option<i64>,
+    pub expires_at: Option<StoredTimestamp>,
+}
+
 #[derive(Debug, FromRow)]
 pub struct Credit {
     pub account_id: Id<Account>,
-    #[sqlx(try_from = "StoredTimestamp")]
-    pub expires_at: Timestamp,
+    #[sqlx(flatten)]
+    pub grant: Grant,
 }
 
 impl Credit {
+    /// Soonest expiry first, grants without one last.
     pub async fn list_unexpired(
         database: &Database,
         source_id: Option<Id<Source>>,
         now: Timestamp,
     ) -> Result<Vec<Self>, DatabaseError> {
         Ok(sqlx::query_as::<_, Self>(
-            "SELECT manual_reset.account_id, manual_reset.expires_at FROM manual_reset \
+            "SELECT manual_reset.account_id, manual_reset.label, manual_reset.remaining, \
+             manual_reset.total, manual_reset.expires_at FROM manual_reset \
              JOIN account ON account.account_id = manual_reset.account_id \
-             WHERE (?1 IS NULL OR account.source_id = ?1) AND manual_reset.expires_at > ?2 \
-             ORDER BY manual_reset.account_id, manual_reset.expires_at",
+             WHERE (?1 IS NULL OR account.source_id = ?1) \
+             AND (manual_reset.expires_at IS NULL OR manual_reset.expires_at > ?2) \
+             ORDER BY manual_reset.account_id, manual_reset.expires_at IS NULL, \
+             manual_reset.expires_at",
         )
         .bind(source_id)
         .bind(StoredTimestamp::from(now))
@@ -37,18 +52,24 @@ impl Credit {
     pub async fn replace(
         connection: &mut SqliteConnection,
         account_id: Id<Account>,
-        expiries: &[Timestamp],
+        grants: &[Grant],
     ) -> Result<(), DatabaseError> {
         sqlx::query("DELETE FROM manual_reset WHERE account_id = ?")
             .bind(account_id)
             .execute(&mut *connection)
             .await?;
-        for expires_at in expiries {
-            sqlx::query("INSERT INTO manual_reset (account_id, expires_at) VALUES (?, ?)")
-                .bind(account_id)
-                .bind(StoredTimestamp::from(*expires_at))
-                .execute(&mut *connection)
-                .await?;
+        for grant in grants {
+            sqlx::query(
+                "INSERT INTO manual_reset (account_id, label, remaining, total, expires_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(account_id)
+            .bind(&grant.label)
+            .bind(grant.remaining)
+            .bind(grant.total)
+            .bind(grant.expires_at)
+            .execute(&mut *connection)
+            .await?;
         }
 
         Ok(())
@@ -60,7 +81,8 @@ impl Credit {
         now: Timestamp,
     ) -> Result<i64, DatabaseError> {
         Ok(sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM manual_reset WHERE account_id = ? AND expires_at > ?",
+            "SELECT COALESCE(SUM(remaining), 0) FROM manual_reset \
+             WHERE account_id = ? AND (expires_at IS NULL OR expires_at > ?)",
         )
         .bind(account_id)
         .bind(StoredTimestamp::from(now))
@@ -89,7 +111,7 @@ pub enum ResetRequestError {
     #[error("the credential is disabled in CLIProxy")]
     Disabled,
     #[error(
-        "the account cannot be reset: its provider grants no manual reset, or its credential lacks what spending one needs"
+        "the account cannot be reset: its provider's manual resets cannot be spent here, or its credential lacks what spending one needs"
     )]
     NotResettable,
     #[error("the account has no unexpired manual reset")]
