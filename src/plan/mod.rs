@@ -1,12 +1,17 @@
 //! A subscription paid for an account. Its price is set against the list cost of each
 //! billing period, never spread over requests.
+//!
+//! Every write that adds, edits or removes a plan records a `plan.changed` in its own
+//! transaction. An edit that leaves the plan as it was, is refused, or names no plan
+//! records none.
 
 pub mod leverage;
 
 use jiff::Timestamp;
-use sqlx::{AssertSqlSafe, FromRow};
+use sqlx::{AssertSqlSafe, FromRow, SqliteConnection};
 
 use crate::account::{Account, AccountSummary};
+use crate::change::{Change, Subject};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
@@ -41,18 +46,15 @@ impl Plan {
     }
 
     pub async fn load(database: &Database, id: Id<Plan>) -> Result<Option<Self>, DatabaseError> {
-        Ok(
-            sqlx::query_as::<_, Self>(AssertSqlSafe(format!("{SELECT} WHERE plan.plan_id = ?")))
-                .bind(id)
-                .fetch_optional(&database.pool)
-                .await?,
-        )
+        let mut connection = database.pool.acquire().await?;
+        Self::read(&mut connection, id).await
     }
 
     pub async fn create(database: &Database, plan: &NewPlan) -> Result<Self, PlanError> {
         plan.check()?;
         let id = database.ids.next::<Self>();
-        sqlx::query(
+        let mut write = database.write().await?;
+        let inserted = sqlx::query(
             "INSERT INTO plan (plan_id, account_id, name, monthly_usd, period_start, period_end) \
              SELECT ?, account_id, ?, ?, ?, ? FROM account WHERE account_id = ?",
         )
@@ -62,32 +64,44 @@ impl Plan {
         .bind(StoredTimestamp::from(plan.period_start))
         .bind(plan.period_end.map(StoredTimestamp::from))
         .bind(plan.account_id)
-        .execute(&database.pool)
+        .execute(&mut *write)
         .await
         .map_err(DatabaseError::from)?;
-
-        Self::load(database, id)
+        if inserted.rows_affected() == 0 {
+            return Err(PlanError::UnknownAccount);
+        }
+        let created = Self::read(&mut write, id)
             .await?
-            .ok_or(PlanError::UnknownAccount)
+            .ok_or(PlanError::UnknownAccount)?;
+        Change::record(&mut write, &Subject::Plan(id)).await?;
+        write.commit().await?;
+
+        Ok(created)
     }
 
-    /// Answers nothing when there is no such plan.
+    /// Answers nothing when there is no such plan. The plan is read and written in one
+    /// transaction, so an edit to one field never undoes a concurrent edit to another.
     pub async fn update(
         database: &Database,
         id: Id<Plan>,
         change: PlanChange,
     ) -> Result<Option<Self>, PlanError> {
-        let Some(plan) = Self::load(database, id).await? else {
+        let mut write = database.write().await?;
+        let Some(current) = Self::read(&mut write, id).await? else {
             return Ok(None);
         };
+        // A stored plan passed the checks, so one that reads the same needs none.
+        if !change.alters(&current) {
+            return Ok(Some(current));
+        }
         let plan = NewPlan {
-            account_id: change.account_id.unwrap_or(plan.account.id),
-            name: change.name.unwrap_or(plan.name),
-            monthly_usd: change.monthly_usd.unwrap_or(plan.monthly_usd),
-            period_start: change.period_start.unwrap_or(plan.period_start),
+            account_id: change.account_id.unwrap_or(current.account.id),
+            name: change.name.unwrap_or(current.name),
+            monthly_usd: change.monthly_usd.unwrap_or(current.monthly_usd),
+            period_start: change.period_start.unwrap_or(current.period_start),
             period_end: change
                 .period_end
-                .unwrap_or_else(|| plan.period_end.map(Timestamp::from)),
+                .unwrap_or_else(|| current.period_end.map(Timestamp::from)),
         };
         plan.check()?;
         let updated = sqlx::query(
@@ -101,24 +115,45 @@ impl Plan {
         .bind(plan.period_end.map(StoredTimestamp::from))
         .bind(plan.account_id)
         .bind(id)
-        .execute(&database.pool)
+        .execute(&mut *write)
         .await
         .map_err(DatabaseError::from)?;
         if updated.rows_affected() == 0 {
             return Err(PlanError::UnknownAccount);
         }
+        let edited = Self::read(&mut write, id).await?;
+        Change::record(&mut write, &Subject::Plan(id)).await?;
+        write.commit().await?;
 
-        Ok(Self::load(database, id).await?)
+        Ok(edited)
     }
 
     /// Answers whether there was a plan to delete.
     pub async fn delete(database: &Database, id: Id<Plan>) -> Result<bool, DatabaseError> {
+        let mut write = database.write().await?;
         let deleted = sqlx::query("DELETE FROM plan WHERE plan_id = ?")
             .bind(id)
-            .execute(&database.pool)
+            .execute(&mut *write)
             .await?;
+        if deleted.rows_affected() == 0 {
+            return Ok(false);
+        }
+        Change::record(&mut write, &Subject::Plan(id)).await?;
+        write.commit().await?;
 
-        Ok(deleted.rows_affected() > 0)
+        Ok(true)
+    }
+
+    async fn read(
+        connection: &mut SqliteConnection,
+        id: Id<Plan>,
+    ) -> Result<Option<Self>, DatabaseError> {
+        Ok(
+            sqlx::query_as::<_, Self>(AssertSqlSafe(format!("{SELECT} WHERE plan.plan_id = ?")))
+                .bind(id)
+                .fetch_optional(connection)
+                .await?,
+        )
     }
 }
 
@@ -155,6 +190,28 @@ pub struct PlanChange {
     pub monthly_usd: Option<f64>,
     pub period_start: Option<Timestamp>,
     pub period_end: Option<Option<Timestamp>>,
+}
+
+impl PlanChange {
+    /// Whether the plan would read differently after the change. A name is compared as
+    /// it is stored, trimmed. A price is compared bit for bit, as its JSON is: `-0.0` is
+    /// not `0.0`, and `NaN` always differs, so it reaches the check that refuses it.
+    fn alters(&self, plan: &Plan) -> bool {
+        self.account_id.is_some_and(|id| id != plan.account.id)
+            || self
+                .name
+                .as_deref()
+                .is_some_and(|name| name.trim() != plan.name)
+            || self
+                .monthly_usd
+                .is_some_and(|usd| usd.to_bits() != plan.monthly_usd.to_bits())
+            || self
+                .period_start
+                .is_some_and(|start| start != plan.period_start)
+            || self
+                .period_end
+                .is_some_and(|end| end != plan.period_end.map(Timestamp::from))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

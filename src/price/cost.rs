@@ -5,6 +5,7 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 
 use crate::app::AppState;
+use crate::change::{Change, Subject};
 use crate::config::PricingConfig;
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
@@ -73,6 +74,9 @@ impl ModelPrice {
     pub async fn fill(state: &AppState) -> Result<usize, DatabaseError> {
         let mut transaction = state.database.write().await?;
         let priced = fill(&mut transaction, &state.config.pricing).await?;
+        if !priced.is_empty() {
+            Change::record(&mut transaction, &Subject::Usage).await?;
+        }
         transaction.commit().await?;
         let count = priced.len();
         publish(state, priced);
@@ -101,6 +105,9 @@ impl ModelPrice {
         .await?
         .rows_affected();
         let priced = fill(&mut transaction, &state.config.pricing).await?;
+        if cleared > 0 || !priced.is_empty() {
+            Change::record(&mut transaction, &Subject::Usage).await?;
+        }
         transaction.commit().await?;
         publish(state, priced);
 

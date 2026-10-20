@@ -23,15 +23,18 @@ pub struct ChangeApi {
 
 #[OpenApi]
 impl ChangeApi {
-    /// The changes after `cursor` to the quota, manual resets, prices and accounts, oldest
-    /// first, as a long poll: while there is none, the request waits up to `timeout`
-    /// seconds (default 30, at most 50) for one to commit and answers it at once.
+    /// Changes after `cursor` to quota, resets, prices, accounts, plans and usage, oldest
+    /// first, as a long poll. With no changes, waits up to `timeout` seconds, default 30
+    /// and at most 50, and answers when a change commits.
     ///
-    /// Each change names the list to read again. `quota.updated` names an account and a
-    /// window whose reported values changed; `reset.updated` an account whose manual resets
-    /// changed; `account.changed` an account whose names, CLIProxy state or last hard
-    /// refresh changed; `price.changed` a model whose latest price changed. Usage does not
-    /// count, so a window's prediction can move without a change.
+    /// `quota.updated` names an account and window whose reported values changed;
+    /// `reset.updated` an account whose manual resets changed; `account.changed` an
+    /// account whose names, CLIProxy state or last hard refresh changed; `price.changed`
+    /// a model whose latest price changed; `plan.changed` a plan added, edited or removed.
+    /// `usage.updated` has no subject fields. It is coalesced to one event per accepted
+    /// ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
+    /// Read the usage summary and leverage again. Duplicates and rejected records alone
+    /// do not emit it. Predictions can move with usage or time without a `quota.updated`.
     ///
     /// `kinds` is a comma-separated list of the kinds to answer; without it every kind is
     /// answered. Read on from the `cursor` of the answer, which passes over the changes
@@ -106,20 +109,24 @@ struct ChangeOutput {
     window_key: Option<String>,
     /// The model of a `price.changed`.
     model: Option<String>,
+    /// The plan of a `plan.changed`, including after deletion.
+    plan_id: Option<String>,
 }
 
 impl From<Change> for ChangeOutput {
     fn from(change: Change) -> Self {
         let kind = change.subject.kind().into();
-        let (account_id, window_key, model) = match change.subject {
+        let (account_id, window_key, model, plan_id) = match change.subject {
             Subject::Account(account_id) | Subject::Resets(account_id) => {
-                (Some(account_id.encode()), None, None)
+                (Some(account_id.encode()), None, None, None)
             }
             Subject::Window {
                 account_id,
                 window_key,
-            } => (Some(account_id.encode()), Some(window_key), None),
-            Subject::Price { model } => (None, None, Some(model)),
+            } => (Some(account_id.encode()), Some(window_key), None, None),
+            Subject::Price { model } => (None, None, Some(model), None),
+            Subject::Plan(plan_id) => (None, None, None, Some(plan_id.encode())),
+            Subject::Usage => (None, None, None, None),
         };
         Self {
             cursor: change.cursor,
@@ -128,6 +135,7 @@ impl From<Change> for ChangeOutput {
             account_id,
             window_key,
             model,
+            plan_id,
         }
     }
 }
@@ -143,6 +151,10 @@ enum ChangeKindOutput {
     PriceChanged,
     #[oai(rename = "account.changed")]
     AccountChanged,
+    #[oai(rename = "plan.changed")]
+    PlanChanged,
+    #[oai(rename = "usage.updated")]
+    UsageUpdated,
 }
 
 impl From<ChangeKind> for ChangeKindOutput {
@@ -152,6 +164,8 @@ impl From<ChangeKind> for ChangeKindOutput {
             ChangeKind::ResetUpdated => Self::ResetUpdated,
             ChangeKind::PriceChanged => Self::PriceChanged,
             ChangeKind::AccountChanged => Self::AccountChanged,
+            ChangeKind::PlanChanged => Self::PlanChanged,
+            ChangeKind::UsageUpdated => Self::UsageUpdated,
         }
     }
 }

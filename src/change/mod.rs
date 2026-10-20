@@ -1,9 +1,7 @@
-//! What changed in the quota, manual resets, prices and accounts that other services read.
+//! Changes to the quota, resets, prices, accounts, plans and usage other services read.
 //!
-//! Every write that changes one of them records the change in its own transaction, so a
-//! reader that follows the changes by cursor sees each committed change once, in commit
-//! order, and knows which list to read again. Only what a reader sees counts: traffic, which
-//! moves an account's counts and a window's prediction on every request, does not.
+//! Each change commits with its write, in cursor order. Usage records one invalidation
+//! per changed batch rather than one per request. It names no client or request.
 
 pub mod snapshot;
 
@@ -19,11 +17,12 @@ use tokio::time::Instant;
 use crate::app::AppState;
 use crate::database::Write;
 use crate::database::codec::StoredTimestamp;
+use crate::plan::Plan;
 use crate::prelude::*;
 
 /// How long a change is kept. A reader whose cursor is older has to read the lists again,
 /// so this is the longest a consumer can be away and still catch up: a week covers a
-/// service that was down over a weekend, and outside a first price sync the table stays small.
+/// service that was down over a weekend. Usage invalidations share this retention.
 pub const RETENTION: SignedDuration = SignedDuration::from_hours(7 * 24);
 /// The most changes one read answers. The public price map read for the first time records
 /// one change per model, about 3500, so a reader catches up in a few reads.
@@ -37,6 +36,8 @@ pub enum ChangeKind {
     ResetUpdated,
     PriceChanged,
     AccountChanged,
+    PlanChanged,
+    UsageUpdated,
 }
 
 /// What changed, and so which list to read again.
@@ -55,6 +56,10 @@ pub enum Subject {
     Resets(Id<Account>),
     /// The latest price of the model from one of its origins.
     Price { model: String },
+    /// A plan was added, edited or removed.
+    Plan(Id<Plan>),
+    /// Usage counts or stored costs changed. Read the summary and leverage again.
+    Usage,
 }
 
 #[derive(Debug)]
@@ -96,15 +101,18 @@ struct StoredChange {
     account_id: Option<Id<Account>>,
     window_key: Option<String>,
     model: Option<String>,
+    plan_id: Option<Id<Plan>>,
     recorded_at: StoredTimestamp,
 }
 
 impl ChangeKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::QuotaUpdated,
         Self::ResetUpdated,
         Self::PriceChanged,
         Self::AccountChanged,
+        Self::PlanChanged,
+        Self::UsageUpdated,
     ];
 
     #[must_use]
@@ -114,6 +122,8 @@ impl ChangeKind {
             Self::ResetUpdated => "reset.updated",
             Self::PriceChanged => "price.changed",
             Self::AccountChanged => "account.changed",
+            Self::PlanChanged => "plan.changed",
+            Self::UsageUpdated => "usage.updated",
         }
     }
 }
@@ -143,6 +153,8 @@ impl Subject {
             Self::Window { .. } => ChangeKind::QuotaUpdated,
             Self::Resets(_) => ChangeKind::ResetUpdated,
             Self::Price { .. } => ChangeKind::PriceChanged,
+            Self::Plan(_) => ChangeKind::PlanChanged,
+            Self::Usage => ChangeKind::UsageUpdated,
         }
     }
 }
@@ -150,24 +162,27 @@ impl Subject {
 impl Change {
     /// Records the change in the write's transaction, so it commits with what changed.
     pub async fn record(write: &mut Write<'_>, subject: &Subject) -> Result<(), DatabaseError> {
-        let (account_id, window_key, model) = match subject {
+        let (account_id, window_key, model, plan_id) = match subject {
             Subject::Account(account_id) | Subject::Resets(account_id) => {
-                (Some(*account_id), None, None)
+                (Some(*account_id), None, None, None)
             }
             Subject::Window {
                 account_id,
                 window_key,
-            } => (Some(*account_id), Some(window_key.as_str()), None),
-            Subject::Price { model } => (None, None, Some(model.as_str())),
+            } => (Some(*account_id), Some(window_key.as_str()), None, None),
+            Subject::Price { model } => (None, None, Some(model.as_str()), None),
+            Subject::Plan(plan_id) => (None, None, None, Some(*plan_id)),
+            Subject::Usage => (None, None, None, None),
         };
         sqlx::query(
-            "INSERT INTO change (kind, account_id, window_key, model, recorded_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO change (kind, account_id, window_key, model, plan_id, recorded_at) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(subject.kind().stored())
         .bind(account_id)
         .bind(window_key)
         .bind(model)
+        .bind(plan_id)
         .bind(StoredTimestamp::from(Timestamp::now()))
         .execute(&mut **write)
         .await?;
@@ -211,7 +226,7 @@ impl Change {
                 .to_string()
         });
         let changes = sqlx::query_as::<_, StoredChange>(
-            "SELECT cursor, kind, account_id, window_key, model, recorded_at FROM change \
+            "SELECT cursor, kind, account_id, window_key, model, plan_id, recorded_at FROM change \
              WHERE cursor > ?1 AND (?2 IS NULL OR kind IN (SELECT value FROM json_each(?2))) \
              ORDER BY cursor LIMIT ?3",
         )
@@ -288,28 +303,43 @@ impl TryFrom<StoredChange> for Change {
         let unreadable = || DatabaseError::Unreadable {
             field: "change",
             value: format!(
-                "{} {} {:?} {:?} {:?}",
-                stored.cursor, stored.kind, stored.account_id, stored.window_key, stored.model
+                "{} {} {:?} {:?} {:?} {:?}",
+                stored.cursor,
+                stored.kind,
+                stored.account_id,
+                stored.window_key,
+                stored.model,
+                stored.plan_id
             ),
         };
         let kind = stored
             .kind
             .parse::<ChangeKind>()
             .map_err(|_| unreadable())?;
-        let subject = match (kind, stored.account_id, &stored.window_key, &stored.model) {
-            (ChangeKind::AccountChanged, Some(account_id), None, None) => {
+        let subject = match (
+            kind,
+            stored.account_id,
+            &stored.window_key,
+            &stored.model,
+            stored.plan_id,
+        ) {
+            (ChangeKind::AccountChanged, Some(account_id), None, None, None) => {
                 Subject::Account(account_id)
             }
-            (ChangeKind::QuotaUpdated, Some(account_id), Some(window_key), None) => {
+            (ChangeKind::QuotaUpdated, Some(account_id), Some(window_key), None, None) => {
                 Subject::Window {
                     account_id,
                     window_key: window_key.clone(),
                 }
             }
-            (ChangeKind::ResetUpdated, Some(account_id), None, None) => Subject::Resets(account_id),
-            (ChangeKind::PriceChanged, None, None, Some(model)) => Subject::Price {
+            (ChangeKind::ResetUpdated, Some(account_id), None, None, None) => {
+                Subject::Resets(account_id)
+            }
+            (ChangeKind::PriceChanged, None, None, Some(model), None) => Subject::Price {
                 model: model.clone(),
             },
+            (ChangeKind::PlanChanged, None, None, None, Some(plan_id)) => Subject::Plan(plan_id),
+            (ChangeKind::UsageUpdated, None, None, None, None) => Subject::Usage,
             _ => return Err(unreadable()),
         };
 

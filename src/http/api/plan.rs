@@ -9,6 +9,7 @@ use poem_openapi::{ApiResponse, Object, OpenApi};
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::account::AccountSummaryOutput;
+use crate::http::conditional::conditional;
 use crate::plan::{NewPlan, Plan, PlanChange, PlanError};
 use crate::prelude::*;
 
@@ -18,7 +19,25 @@ pub struct PlanApi {
 
 #[OpenApi]
 impl PlanApi {
-    #[oai(path = "/plans", method = "get", operation_id = "list_plans")]
+    /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+    /// with no body while those bytes are the same, which holds until a `plan.changed`, or an
+    /// `account.changed` for a plan's account.
+    #[oai(
+        path = "/plans",
+        method = "get",
+        operation_id = "list_plans",
+        transform = "conditional",
+        request_header(
+            name = "If-None-Match",
+            ty = "Option<String>",
+            description = "The ETag of an earlier answer. While the answer is the same, it is 304 with no body."
+        ),
+        response_header(
+            name = "ETag",
+            ty = "Option<String>",
+            description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
+        )
+    )]
     async fn list_plans(&self) -> PlanListResponse {
         match Plan::list(&self.state.database).await {
             Ok(plans) => PlanListResponse::Found(Json(PlanList {

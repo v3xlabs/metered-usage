@@ -848,6 +848,9 @@ async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
         "/api/quota",
         "/api/prices?model=claude-sonnet-4",
         "/api/accounts",
+        "/api/usage/summary?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z&step=day",
+        "/api/plans",
+        "/api/leverage",
     ] {
         let response = gateway
             .anonymous
@@ -859,6 +862,7 @@ async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
     }
     for path in [
         "/api/usage/events",
+        "/api/usage/stream",
         "/api/analytics/summary",
         "/api/sources",
         "/mcp",
@@ -876,6 +880,8 @@ async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
         "/api/quota/reset",
         "/api/prices/sync",
         "/api/prices",
+        "/api/plans",
+        "/api/usage/summary",
     ] {
         let response = gateway
             .anonymous

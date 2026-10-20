@@ -423,6 +423,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same, which holds until a `plan.changed`, or an
+         *     `account.changed` for a plan's account.
+         */
         get: operations["list_plans"];
         put?: never;
         post: operations["create_plan"];
@@ -459,6 +464,10 @@ export interface paths {
         /**
          * Every plan's latest billing periods, newest first, each with the list cost of the
          *     plan's account in it against the plan's price.
+         * @description The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same. A `plan.changed`, a `usage.updated` or an
+         *     `account.changed` for a plan's account can move it, and so can a period ending, which
+         *     turns it `complete`.
          */
         get: operations["leverage"];
         put?: never;
@@ -570,14 +579,17 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The changes after `cursor` to the quota, manual resets, prices and accounts, oldest
-         *     first, as a long poll: while there is none, the request waits up to `timeout`
-         *     seconds (default 30, at most 50) for one to commit and answers it at once.
-         * @description Each change names the list to read again. `quota.updated` names an account and a
-         *     window whose reported values changed; `reset.updated` an account whose manual resets
-         *     changed; `account.changed` an account whose names, CLIProxy state or last hard
-         *     refresh changed; `price.changed` a model whose latest price changed. Usage does not
-         *     count, so a window's prediction can move without a change.
+         * Changes after `cursor` to quota, resets, prices, accounts, plans and usage, oldest
+         *     first, as a long poll. With no changes, waits up to `timeout` seconds, default 30
+         *     and at most 50, and answers when a change commits.
+         * @description `quota.updated` names an account and window whose reported values changed;
+         *     `reset.updated` an account whose manual resets changed; `account.changed` an
+         *     account whose names, CLIProxy state or last hard refresh changed; `price.changed`
+         *     a model whose latest price changed; `plan.changed` a plan added, edited or removed.
+         *     `usage.updated` has no subject fields. It is coalesced to one event per accepted
+         *     ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
+         *     Read the usage summary and leverage again. Duplicates and rejected records alone
+         *     do not emit it. Predictions can move with usage or time without a `quota.updated`.
          *
          *     `kinds` is a comma-separated list of the kinds to answer; without it every kind is
          *     answered. Read on from the `cursor` of the answer, which passes over the changes
@@ -589,6 +601,43 @@ export interface paths {
          *     `latest_cursor`: read the lists again and follow from `latest_cursor`.
          */
         get: operations["list_changes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/usage/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calls, tokens and costs of the window `[from, to)`, in UTC hours or days.
+         * @description `from` and `to` are required RFC 3339 instants, `to` exclusive and after `from`.
+         *     `step` is `hour` or `day`: buckets start on whole UTC hours or at UTC midnight, and a
+         *     bucket that `from` or `to` cuts counts only the part inside the window. Every bucket
+         *     that overlaps the window is listed, oldest first, with zeros where nothing happened;
+         *     a window of more than 5000 buckets is refused.
+         *
+         *     `group` is `account`, `model` or `provider`, and absent sums everything. Grouped,
+         *     `groups` holds every group with usage in the window and each bucket holds every
+         *     group with usage in that bucket, both ordered by key. No group is dropped or merged,
+         *     so the groups of a bucket add up to its `total`. An account is keyed by its
+         *     `account_id`, as `/accounts` lists it. Ungrouped, neither `groups` is present.
+         *
+         *     Aggregation is not anonymization. Narrow windows can isolate a call's token counts
+         *     and costs, and repeated queries can infer its timestamp. The answer does not include
+         *     request bodies, request ids, caller, session, harness or user agent.
+         *
+         *     The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+         *     with no body while those bytes are the same, which holds until a `usage.updated`.
+         */
+        get: operations["usage_summary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -703,6 +752,8 @@ export interface components {
             window_key?: string;
             /** @description The model of a `price.changed`. */
             model?: string;
+            /** @description The plan of a `plan.changed`, including after deletion. */
+            plan_id?: string;
         };
         /** ChangeEvents */
         ChangeEvents: {
@@ -714,7 +765,7 @@ export interface components {
             cursor: number;
         };
         /** @enum {string} */
-        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed";
+        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed" | "plan.changed" | "usage.updated";
         /** ChangesExpired */
         ChangesExpired: {
             message: string;
@@ -1384,6 +1435,107 @@ export interface components {
         };
         /** @description One Server-Sent Event of the usage stream; its SSE type says which. */
         UsageStreamMessage: components["schemas"]["UsageEvent"] | components["schemas"]["PricedEvent"];
+        /** UsageSummary */
+        UsageSummary: {
+            /** @description The whole window. */
+            total: components["schemas"]["UsageSummaryMetrics"] & unknown;
+            /** @description Every group with usage in the window, by key. Present only with `group`. */
+            groups?: components["schemas"]["UsageSummaryGroup"][];
+            /** @description Every bucket that overlaps the window, oldest first. */
+            buckets: components["schemas"]["UsageSummaryBucket"][];
+        };
+        /** UsageSummaryBucket */
+        UsageSummaryBucket: {
+            /** @description RFC 3339 in UTC: a whole hour, or midnight. */
+            start: string;
+            total: components["schemas"]["UsageSummaryMetrics"];
+            /** @description Every group with usage in this bucket, by key. Present only with `group`. */
+            groups?: components["schemas"]["UsageSummaryGroup"][];
+        };
+        /** UsageSummaryGroup */
+        UsageSummaryGroup: {
+            /** @description An `account_id`, a model or a provider, as `group` asked. */
+            key: string;
+            metrics: components["schemas"]["UsageSummaryMetrics"];
+        };
+        /**
+         * @description What the usage is split by.
+         * @enum {string}
+         */
+        UsageSummaryGroupBy: "account" | "model" | "provider";
+        /**
+         * UsageSummaryMetrics
+         * @description Costs are the ones stored on each call when it was priced, never a guess. A call no
+         *     price has been found for adds nothing to `list_cost_usd` and is counted in
+         *     `unpriced_requests`; a call with neither a price nor a charge its gateway reported adds
+         *     nothing to `billed_cost_usd` and is counted in `unbilled_requests`. A cost is complete
+         *     when its count is 0.
+         */
+        UsageSummaryMetrics: {
+            /**
+             * Format: int64
+             * @description Calls, failed ones included.
+             */
+            requests: number;
+            /**
+             * Format: int64
+             * @description Every input token, cache reads and writes included.
+             */
+            input_tokens: number;
+            /**
+             * Format: int64
+             * @description Input less cache reads and writes, never below zero for a call.
+             */
+            uncached_input_tokens: number;
+            /** Format: int64 */
+            cache_read_tokens: number;
+            /** Format: int64 */
+            cache_write_tokens: number;
+            /**
+             * Format: int64
+             * @description Every output token, reasoning included.
+             */
+            output_tokens: number;
+            /**
+             * Format: int64
+             * @description The part of the output spent reasoning.
+             */
+            reasoning_tokens: number;
+            /**
+             * Format: int64
+             * @description Tokens the gateway counted in a total without saying whether they were input or
+             *     output.
+             */
+            unclassified_tokens: number;
+            /** Format: int64 */
+            total_tokens: number;
+            /**
+             * Format: double
+             * @description At list price, of the calls that have one.
+             */
+            list_cost_usd: number;
+            /**
+             * Format: double
+             * @description What was charged: what the gateway reported, else 0 for an account signed in with
+             *     OAuth, else the list price.
+             */
+            billed_cost_usd: number;
+            /**
+             * Format: int64
+             * @description Calls left out of `list_cost_usd`.
+             */
+            unpriced_requests: number;
+            /**
+             * Format: int64
+             * @description Calls left out of `billed_cost_usd`.
+             */
+            unbilled_requests: number;
+        };
+        /**
+         * @description How long each bucket is, in UTC.
+         * @enum {string}
+         */
+        UsageSummaryStep: "hour" | "day";
     };
     responses: never;
     parameters: never;
@@ -2294,7 +2446,10 @@ export interface operations {
     list_plans: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2302,6 +2457,8 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2310,6 +2467,8 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2454,7 +2613,10 @@ export interface operations {
             query?: {
                 periods?: number;
             };
-            header?: never;
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2462,6 +2624,8 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2470,6 +2634,8 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2728,6 +2894,56 @@ export interface operations {
             };
             500: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    usage_summary: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+                step: components["schemas"]["UsageSummaryStep"];
+                group?: components["schemas"]["UsageSummaryGroupBy"];
+            };
+            header?: {
+                /** @description The ETag of an earlier answer. While the answer is the same, it is 304 with no body. */
+                "IF-NONE-MATCH"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["UsageSummary"];
+                };
+            };
+            /** @description A bound that is not RFC 3339, `to` not after `from`, or too many buckets. */
+            400: {
+                headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
                     [name: string]: unknown;
                 };
                 content: {

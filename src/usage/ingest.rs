@@ -5,6 +5,7 @@ use jiff::Timestamp;
 use crate::account::Account;
 use crate::app::AppState;
 use crate::change::snapshot::{Scope, Snapshot};
+use crate::change::{Change, Subject};
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::id::Id;
@@ -171,6 +172,9 @@ pub async fn ingest(
         }
     }
     snapshot.record_changes(&mut transaction).await?;
+    if report.accepted > 0 {
+        Change::record(&mut transaction, &Subject::Usage).await?;
+    }
     transaction.commit().await?;
     if is_new_credential {
         quota::sync_logged(state, Some(source_id)).await;

@@ -17,9 +17,11 @@ use sqlx::{
 };
 
 use crate::change::snapshot::{Scope, Snapshot};
+use crate::change::{Change, Subject};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
+use crate::plan::Plan;
 use crate::source::Source;
 
 /// `event_count` counts the events charged to the row itself, so a merged account, whose
@@ -219,16 +221,25 @@ impl Account {
         }
         let snapshot =
             Snapshot::accounts(&mut transaction, Scope::Source(merged.source_id)).await?;
-        for statement in [
-            "UPDATE usage_event SET account_id = ? WHERE account_id = ?",
-            "UPDATE plan SET account_id = ? WHERE account_id = ?",
-        ] {
-            sqlx::query(statement)
-                .bind(into)
-                .bind(id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(DatabaseError::from)?;
+        let moved = sqlx::query("UPDATE usage_event SET account_id = ? WHERE account_id = ?")
+            .bind(into)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(DatabaseError::from)?;
+        if moved.rows_affected() > 0 {
+            Change::record(&mut transaction, &Subject::Usage).await?;
+        }
+        let plans = sqlx::query_scalar::<_, Id<Plan>>(
+            "UPDATE plan SET account_id = ? WHERE account_id = ? RETURNING plan_id",
+        )
+        .bind(into)
+        .bind(id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(DatabaseError::from)?;
+        for plan_id in plans {
+            Change::record(&mut transaction, &Subject::Plan(plan_id)).await?;
         }
         sqlx::query(
             "UPDATE account SET merged_into_account_id = ? \

@@ -40,6 +40,7 @@ pub const METRICS: &str = "COUNT(*) AS requests, \
              * (model_price.cache_write_usd_per_mtok - model_price.input_usd_per_mtok)) \
          / 1e6) AS cache_savings_usd, \
      COUNT(*) - COUNT(usage_event.list_cost_usd) AS unpriced_requests, \
+     COUNT(*) - COUNT(usage_event.billed_cost_usd) AS unbilled_requests, \
      TOTAL(usage_event.latency_ms) AS latency_ms_total, \
      TOTAL(usage_event.latency_ms IS NOT NULL) AS latency_samples, \
      TOTAL(usage_event.ttft_ms) AS ttft_ms_total, \
@@ -74,6 +75,8 @@ pub struct UsageMetrics {
     pub output_cost_usd: f64,
     pub cache_savings_usd: f64,
     pub unpriced_requests: i64,
+    /// Events with no billed cost: unpriced, and their gateway reported no charge either.
+    pub unbilled_requests: i64,
     latency_ms_total: f64,
     latency_samples: f64,
     ttft_ms_total: f64,
@@ -120,6 +123,7 @@ impl AddAssign<&Self> for UsageMetrics {
         self.output_cost_usd += other.output_cost_usd;
         self.cache_savings_usd += other.cache_savings_usd;
         self.unpriced_requests += other.unpriced_requests;
+        self.unbilled_requests += other.unbilled_requests;
         self.latency_ms_total += other.latency_ms_total;
         self.latency_samples += other.latency_samples;
         self.ttft_ms_total += other.ttft_ms_total;

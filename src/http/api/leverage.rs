@@ -8,6 +8,7 @@ use poem_openapi::{ApiResponse, Object, OpenApi};
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::plan::PlanOutput;
+use crate::http::conditional::conditional;
 use crate::plan::leverage::{BillingPeriod, PlanLeverage};
 
 pub const DEFAULT_PERIODS: usize = 6;
@@ -21,7 +22,27 @@ pub struct LeverageApi {
 impl LeverageApi {
     /// Every plan's latest billing periods, newest first, each with the list cost of the
     /// plan's account in it against the plan's price.
-    #[oai(path = "/leverage", method = "get", operation_id = "leverage")]
+    ///
+    /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
+    /// with no body while those bytes are the same. A `plan.changed`, a `usage.updated` or an
+    /// `account.changed` for a plan's account can move it, and so can a period ending, which
+    /// turns it `complete`.
+    #[oai(
+        path = "/leverage",
+        method = "get",
+        operation_id = "leverage",
+        transform = "conditional",
+        request_header(
+            name = "If-None-Match",
+            ty = "Option<String>",
+            description = "The ETag of an earlier answer. While the answer is the same, it is 304 with no body."
+        ),
+        response_header(
+            name = "ETag",
+            ty = "Option<String>",
+            description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
+        )
+    )]
     async fn leverage(&self, periods: Query<Option<u32>>) -> LeverageResponse {
         let periods = periods
             .0

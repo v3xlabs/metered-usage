@@ -12,6 +12,7 @@ pub mod quota;
 pub mod session;
 pub mod source;
 pub mod usage;
+pub mod usage_summary;
 
 use poem_openapi::Object;
 

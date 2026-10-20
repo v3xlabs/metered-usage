@@ -1,7 +1,7 @@
 //! One shared token guards everything that reads or writes usage. A client presents it as
 //! a bearer token, or as the session cookie a browser was given for it. Two optional tokens
 //! read less: one every `GET`, for a dashboard, and one only what another service needs to
-//! follow quota, resets, prices and accounts.
+//! follow quota, resets, prices, accounts, usage summaries and plans.
 
 use std::sync::Arc;
 
@@ -21,7 +21,15 @@ const OPEN: [(Method, &str); 3] = [
 
 /// Operations under [`crate::http::MOUNT`] the consumer token reaches, all `GET`: the
 /// change feed and the lists its changes name.
-const CONSUMER_READS: [&str; 4] = ["/events", "/quota", "/prices", "/accounts"];
+const CONSUMER_READS: [&str; 7] = [
+    "/events",
+    "/quota",
+    "/prices",
+    "/accounts",
+    "/usage/summary",
+    "/plans",
+    "/leverage",
+];
 
 /// The tokens the API admits, each to its own operations.
 #[derive(Clone)]
@@ -31,7 +39,7 @@ pub struct Credentials {
     /// Admits every `GET`, for a dashboard such as Grafana.
     pub read_token: Option<Token>,
     /// Admits only the `GET`s of [`CONSUMER_READS`], for a service such as Kettle Code that
-    /// follows quota and prices and reads no usage.
+    /// follows quota, prices, aggregate usage and plans, but cannot read request records.
     pub consumer_token: Option<Token>,
 }
 
