@@ -30,6 +30,9 @@ struct Calls {
     received: Arc<Mutex<Vec<Value>>>,
     /// The `auth_index`, or for an entry without one its `name`, of every entry left out.
     omitted: Arc<Mutex<Vec<&'static str>>>,
+    /// The same keys, for the entries CLIProxy serves as turned off. A turned-off entry is
+    /// still listed; only its `disabled` flag and status change.
+    disabled: Arc<Mutex<Vec<&'static str>>>,
     /// Listings served so far; each is observed one second after the last.
     listings: Arc<Mutex<i64>>,
 }
@@ -45,6 +48,13 @@ impl Calls {
     fn omit(&self, entries: &[&'static str]) {
         if let Ok(mut omitted) = self.omitted.lock() {
             *omitted = entries.to_vec();
+        }
+    }
+
+    /// Turns the named credentials off, as the management UI's toggle does.
+    fn disable(&self, entries: &[&'static str]) {
+        if let Ok(mut disabled) = self.disabled.lock() {
+            *disabled = entries.to_vec();
         }
     }
 }
@@ -71,6 +81,11 @@ fn auth_files(request: &Request, Data(calls): Data<&Calls>) -> Response {
         .omitted
         .lock()
         .map(|omitted| omitted.clone())
+        .unwrap_or_default();
+    let disabled = calls
+        .disabled
+        .lock()
+        .map(|disabled| disabled.clone())
         .unwrap_or_default();
     let files = json!([
             {
@@ -126,6 +141,21 @@ fn auth_files(request: &Request, Data(calls): Data<&Calls>) -> Response {
                 .as_str()
                 .or_else(|| file["name"].as_str());
             !key.is_some_and(|key| omitted.contains(&key))
+        })
+        .cloned()
+        .map(|mut file| {
+            // CLIProxy keeps a turned-off credential in its list and reports the flag and
+            // status, as the real one does.
+            let key = file["auth_index"]
+                .as_str()
+                .or_else(|| file["name"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            if disabled.iter().any(|entry| *entry == key) {
+                file["disabled"] = json!(true);
+                file["status"] = json!("disabled");
+            }
+            file
         })
         .collect::<Vec<_>>();
     Json(json!({
@@ -284,6 +314,14 @@ fn fraction(window: &Value) -> f64 {
     window["used_fraction"].as_f64().unwrap_or(f64::NAN)
 }
 
+/// The account list as the Accounts page reads it.
+async fn accounts_of(client: &TestClient<impl poem::Endpoint>) -> Value {
+    let response = client.get("/api/accounts").send().await;
+    response.assert_status_is_ok();
+
+    response.json().await.value().deserialize::<Value>()
+}
+
 /// Every stored value of every table, as text.
 async fn stored_text(state: &AppState) -> Result<String, sqlx::Error> {
     let pool = &state.database.pool;
@@ -353,6 +391,162 @@ async fn soft_sync_registers_every_credential_without_reaching_a_provider() {
     accounts.assert_status_is_ok();
     let accounts = accounts.json().await.value().deserialize::<Value>();
     assert_eq!(accounts["accounts"].as_array().expect("accounts").len(), 6);
+}
+
+/// A credential turned off in CLIProxy stays in the list, marked as off, with the windows its
+/// provider last reported. Turning it on again continues the same account.
+#[tokio::test]
+async fn a_turned_off_credential_stays_listed_with_its_windows_and_keeps_its_account() {
+    let calls = Calls::default();
+    let (client, _state) = service(&calls).await.expect("a service");
+    let sync = || async {
+        let response = client
+            .post("/api/quota/sync")
+            .body_json(&json!({}))
+            .send()
+            .await;
+        response.assert_status_is_ok();
+        response.json().await.value().deserialize::<Value>()
+    };
+    let account_id = |synced: &Value| {
+        by_provider(synced, "claude")["account"]["account_id"]
+            .as_str()
+            .expect("an account id")
+            .to_owned()
+    };
+
+    // A hard refresh gives the Claude credential the windows a later sync must keep.
+    let refreshed = client
+        .post("/api/quota/refresh")
+        .body_json(&json!({}))
+        .send()
+        .await;
+    refreshed.assert_status_is_ok();
+    let refreshed = refreshed.json().await.value().deserialize::<Value>();
+    let before = account_id(&refreshed);
+    assert!((fraction(window(by_provider(&refreshed, "claude"), "seven-day")) - 0.62).abs() < 1e-9);
+
+    // Turned off: still listed, marked as off, windows kept, and not marked removed.
+    calls.disable(&["a1"]);
+    let off = sync().await;
+    let claude = by_provider(&off, "claude");
+    assert_eq!(off["accounts"].as_array().expect("accounts").len(), 6);
+    assert_eq!(claude["account"]["account_id"], before.as_str());
+    assert_eq!(claude["disabled"], true);
+    assert_eq!(claude["status"], "disabled");
+    assert_eq!(claude["removed_at"], Value::Null);
+    assert!((fraction(window(claude, "five-hour")) - 0.37).abs() < 1e-9);
+    assert!((fraction(window(claude, "seven-day")) - 0.62).abs() < 1e-9);
+    assert_eq!(claude["hard_refreshable"], false);
+    // The account list agrees, so the Accounts page shows it too.
+    let accounts = accounts_of(&client).await;
+    let listed = accounts["accounts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|account| account["account_id"] == before.as_str())
+        .expect("the turned-off account");
+    assert_eq!(listed["disabled"], true);
+    assert_eq!(listed["removed_at"], Value::Null);
+
+    // Turned on again: the same account, the same windows, and no gap in its history.
+    calls.disable(&[]);
+    let on = sync().await;
+    let claude = by_provider(&on, "claude");
+    assert_eq!(claude["account"]["account_id"], before.as_str());
+    assert_eq!(claude["disabled"], false);
+    assert_eq!(claude["status"], "active");
+    assert_eq!(claude["removed_at"], Value::Null);
+    assert!((fraction(window(claude, "seven-day")) - 0.62).abs() < 1e-9);
+    assert_eq!(
+        by_provider(&on, "claude")["account"]["first_seen_at"],
+        by_provider(&refreshed, "claude")["account"]["first_seen_at"],
+    );
+
+    // A request before the cycle and one after are charged to the same account, so its
+    // history has no gap across turning it off and on.
+    let sources = client.get("/api/sources").send().await;
+    sources.assert_status_is_ok();
+    let sources = sources.json().await.value().deserialize::<Value>();
+    let source_id = sources["sources"][0]["source_id"]
+        .as_str()
+        .expect("a source id");
+    let post = |request_id: &str| {
+        let mut record = serde_json::from_str::<Value>(include_str!("fixtures/claude.json"))
+            .expect("a reference record");
+        record["auth_index"] = json!("a1");
+        record["request_id"] = json!(request_id);
+        client
+            .post(format!("/api/sources/{source_id}/events"))
+            .body_json(&json!({ "records": [record] }))
+            .send()
+    };
+    let charged = |value: &Value| {
+        value["accounts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|account| account["account_id"] == before.as_str())
+            .cloned()
+            .expect("the account under test")
+    };
+    post("while-on").await.assert_status_is_ok();
+    assert_eq!(charged(&accounts_of(&client).await)["event_count"], 1);
+
+    // Turned off again: the request already charged stays on the account.
+    calls.disable(&["a1"]);
+    sync().await;
+    let off_again = charged(&accounts_of(&client).await);
+    assert_eq!(off_again["disabled"], true);
+    assert_eq!(off_again["event_count"], 1);
+
+    // Turned on again and used: the same account carries both requests.
+    calls.disable(&[]);
+    sync().await;
+    post("after-turning-on").await.assert_status_is_ok();
+    let both = charged(&accounts_of(&client).await);
+    assert_eq!(both["account_id"], before.as_str());
+    assert_eq!(both["event_count"], 2);
+    assert_eq!(both["disabled"], false);
+}
+
+/// A credential turned off is not a credential gone: only one CLIProxy stops listing counts
+/// as removed, and turning one off never marks it so.
+#[tokio::test]
+async fn turning_a_credential_off_never_marks_it_removed() {
+    let calls = Calls::default();
+    let (client, _state) = service(&calls).await.expect("a service");
+    let sync = || async {
+        let response = client
+            .post("/api/quota/sync")
+            .body_json(&json!({}))
+            .send()
+            .await;
+        response.assert_status_is_ok();
+        response.json().await.value().deserialize::<Value>()
+    };
+
+    // Turned off and listed: not removed, however many syncs run.
+    calls.disable(&["a1", "a2"]);
+    for _ in 0..3 {
+        let synced = sync().await;
+        assert_eq!(by_provider(&synced, "claude")["removed_at"], Value::Null);
+        assert_eq!(by_provider(&synced, "codex")["removed_at"], Value::Null);
+        assert_eq!(by_provider(&synced, "claude")["disabled"], true);
+    }
+
+    // Gone from a complete listing: removed, and still off rather than active.
+    calls.disable(&[]);
+    calls.omit(&["a1", "no-index.json"]);
+    let gone = sync().await;
+    assert_eq!(by_provider(&gone, "claude")["disabled"], true);
+    assert_eq!(
+        by_provider(&gone, "claude")["removed_at"],
+        (LISTED_AT + SignedDuration::from_secs(3)).to_string()
+    );
+    // The credential that is still listed is neither.
+    assert_eq!(by_provider(&gone, "codex")["removed_at"], Value::Null);
+    assert_eq!(by_provider(&gone, "codex")["disabled"], false);
 }
 
 #[tokio::test]

@@ -38,10 +38,16 @@ const CODEX_PLAN_LABELS: Readonly<Record<string, string>> = {
 export const planLabel = (provider: string, plan: string): string =>
   (provider === "codex" ? CODEX_PLAN_LABELS[plan] : undefined) ?? plan;
 
+// A credential CLIProxy deleted or replaced with a new sign-in. Its auth file is gone, so it
+// is not coming back. A credential merely turned off is still listed and can be turned on
+// again, so it is not removed.
+export const isRemoved = (credential: { removed_at?: string; }): boolean =>
+  credential.removed_at !== undefined;
+
 // A credential CLIProxy deleted, replaced with a new sign-in, or turned off. Its events and
-// plans stay, but it carries no more traffic.
+// plans stay, but it carries no traffic.
 export const isRetired = (credential: { disabled: boolean; removed_at?: string; }): boolean =>
-  credential.disabled || credential.removed_at !== undefined;
+  credential.disabled || isRemoved(credential);
 
 // Compares the stored names, as a redacted label would make every account read alike.
 const nameOf = (account: AccountSummary): string =>

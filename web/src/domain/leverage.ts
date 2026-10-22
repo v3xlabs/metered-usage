@@ -1,7 +1,7 @@
 import type { Account } from "../api/accounts";
 import type { LeveragePeriod } from "../api/leverage";
 import type { Plan } from "../api/plans";
-import { isRetired, planLabel } from "./account";
+import { isRemoved, isRetired, planLabel } from "./account";
 import { formatUtcDay } from "./format";
 
 const MS_PER_DAY = 86_400_000;
@@ -97,14 +97,15 @@ export const reportedPlanChange = (entry: AccountLeverage): string | undefined =
 
 export type PlanEndSuggestion = { planId: string; periodEnd: string; lastRequestAt: string | undefined; isRemoved: boolean; };
 
-// A plan still open on a retired credential ended with its last request, or on the day
-// CLIProxy stopped listing a credential that carried none. CLIProxy's `error` status is
-// not a reason: it also covers a quota cooldown that lasts days. `period_end` is exclusive,
-// so the end offered is the midnight after that moment.
+// A plan still open on a credential CLIProxy stopped listing ended with its last request, or
+// on the day CLIProxy stopped listing a credential that carried none. A credential merely
+// turned off is still listed and can be turned back on, so its plan is not over. CLIProxy's
+// `error` status is not a reason either: it also covers a quota cooldown that lasts days.
+// `period_end` is exclusive, so the end offered is the midnight after that moment.
 export const suggestedPlanEnd = (entry: AccountLeverage): PlanEndSuggestion | undefined => {
   const plan = entry.active?.plan;
 
-  if (plan === undefined || plan.period_end !== undefined || !isRetired(entry.account)) return undefined;
+  if (plan === undefined || plan.period_end !== undefined || !isRemoved(entry.account)) return undefined;
 
   const lastMoment = entry.account.last_used_at ?? entry.account.removed_at;
 

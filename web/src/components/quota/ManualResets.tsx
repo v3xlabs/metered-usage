@@ -46,7 +46,8 @@ export const ManualResets = (properties: {
     .filter(grant => expiryMs(grant) > properties.nowMs)
     .toSorted((left, right) => expiryMs(left) - expiryMs(right)));
   const count = createMemo(() => available().reduce((sum, grant) => sum + grant.remaining, 0));
-  const isSpendable = createMemo(() => available().some(grant => grant.spendable));
+  // A turned-off credential is refused by the reset endpoint, so the action is not offered.
+  const isSpendable = createMemo(() => !properties.entry.disabled && available().some(grant => grant.spendable));
   const isPending = createMemo(() => step().kind === "pending");
   let cancel: HTMLButtonElement | undefined;
   const failureMessage = createMemo(() => {
@@ -108,7 +109,9 @@ export const ManualResets = (properties: {
       <Popover.Anchor as="span" class={count() > 0 || isOpen() ? "inline-flex" : "hidden"}>
         <Show when={count() > 0}>
           <Popover.Trigger
-            aria-label={`${count()} manual quota ${count() === 1 ? "reset" : "resets"} available for ${accountLabel(properties.entry.account)}`}
+            aria-label={properties.entry.disabled
+              ? `${count()} manual quota ${count() === 1 ? "reset" : "resets"} for ${accountLabel(properties.entry.account)}, which is turned off in CLIProxy`
+              : `${count()} manual quota ${count() === 1 ? "reset" : "resets"} available for ${accountLabel(properties.entry.account)}`}
             title="Manual quota resets"
             class={["-my-1 flex min-h-7 items-center gap-1 rounded-control px-1 text-xs text-slate-600 hover:bg-raised hover:text-slate-900 data-expanded:bg-raised dark:text-slate-400 dark:hover:text-slate-100", FOCUS]}
           >
@@ -209,7 +212,9 @@ export const ManualResets = (properties: {
               <p role="status" class="text-xs text-slate-600 dark:text-slate-400">No manual resets remain.</p>
             </Show>
             <Show when={count() > 0 && !isSpendable()}>
-              <p class="text-xs text-slate-600 dark:text-slate-400">These resets can't be used here.</p>
+              <p class="text-xs text-slate-600 dark:text-slate-400">
+                {properties.entry.disabled ? "Turn this credential on in CLIProxy to use them." : "These resets can't be used here."}
+              </p>
             </Show>
             <div class="flex justify-end gap-2">
               <Popover.CloseButton class={[BUTTON, FOCUS]}>Close</Popover.CloseButton>

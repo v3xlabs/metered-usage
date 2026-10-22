@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanu
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
 import { createUsageStream } from "../../api/usageStream";
-import { groupBySource, isRetired } from "../../domain/account";
+import { groupBySource, isRemoved } from "../../domain/account";
 import { redact } from "../../domain/privacy";
 import { byLastUse, formatAge, latestMoment } from "../../domain/quota";
 import type { RequestArrival } from "../../domain/requestEffect";
@@ -49,8 +49,10 @@ export const QuotaPanel = () => {
   const [notice, setNotice] = createSignal<Notice | undefined>();
   const health = createAccountHealth();
 
-  // A retired credential keeps its history for the other pages but has no quota left to watch.
-  const current = createMemo(() => accounts().filter(entry => !isRetired(entry))
+  // A removed credential keeps its history for the other pages but has no quota left to
+  // watch. A turned-off one is still listed and is capacity you can turn back on, so it stays
+  // with its last known windows.
+  const current = createMemo(() => accounts().filter(entry => !isRemoved(entry))
     .toSorted(byLastUse));
   const hasRefreshable = createMemo(() => current().some(entry => entry.hard_refreshable));
   // Every listing stamps the retired credentials it still names too, so they date the last sync.
@@ -231,7 +233,7 @@ export const QuotaPanel = () => {
               <p class="px-1 py-4 text-sm text-slate-500 dark:text-slate-500">
                 {accounts().length === 0
                   ? "No CLIProxy account has reported quota yet."
-                  : `All ${accounts().length} credentials are disabled or no longer listed by CLIProxy. Their history stays on the Accounts and Plan leverage pages.`}
+                  : `All ${accounts().length} credentials are no longer listed by CLIProxy. Their history stays on the Accounts and Plan leverage pages.`}
               </p>
             )}
           >
