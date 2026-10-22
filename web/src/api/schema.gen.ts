@@ -1165,7 +1165,11 @@ export interface components {
         };
         /**
          * QuotaWindow
-         * @description One limit the provider reported at the last successful hard refresh.
+         * @description A provider-reported limit, from a hard refresh or a normal request's response.
+         *
+         *     `meta-subscription` records an exhausted Meta subscription and its reset from a 429,
+         *     without inventing an amount or a window duration. A later success or the named reset
+         *     removes it and records `quota.updated`, so consumers read this list again.
          */
         QuotaWindow: {
             window_key: string;

@@ -11,6 +11,7 @@ pub mod management;
 pub mod manual_reset;
 pub mod prediction;
 pub mod provider;
+pub mod response;
 pub mod window;
 
 use std::sync::Arc;
@@ -85,6 +86,7 @@ pub enum RefreshRequestError {
 /// Soft syncs every CLIProxy source now and then every [`SOFT_SYNC_INTERVAL`]. Never hard
 /// refreshes.
 pub fn spawn(state: Arc<AppState>) {
+    response::spawn(Arc::clone(&state));
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(SOFT_SYNC_INTERVAL);
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);

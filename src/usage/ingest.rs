@@ -99,7 +99,14 @@ pub async fn ingest(
     let mut stored = Vec::with_capacity(records.len());
     let mut is_new_credential = false;
     let mut transaction = database.write().await?;
-    let snapshot = Snapshot::accounts(&mut transaction, Scope::Source(source_id)).await?;
+    let snapshot = if records
+        .iter()
+        .any(|record| matches!(record, Incoming::Record(event) if event.provider == "meta"))
+    {
+        Snapshot::quota(&mut transaction, Scope::Source(source_id)).await?
+    } else {
+        Snapshot::accounts(&mut transaction, Scope::Source(source_id)).await?
+    };
     for record in records {
         let event = match record {
             Incoming::Record(event) => event,
@@ -165,6 +172,7 @@ pub async fn ingest(
             .execute(&mut *transaction)
             .await?;
         if inserted.rows_affected() > 0 {
+            quota::response::observe(&mut transaction, account_id, &event, received_at).await?;
             stored.push(id);
             report.accepted += 1;
         } else {

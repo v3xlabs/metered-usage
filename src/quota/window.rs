@@ -13,6 +13,7 @@ use crate::database::{Database, DatabaseError};
 use crate::id::Id;
 use crate::quota::calibration::Calibration;
 use crate::quota::prediction::Prediction;
+use crate::quota::response::WINDOW_KEY;
 use crate::source::Source;
 
 /// Kimi's unit, and the one unit this service meters too: each request it records is one
@@ -48,7 +49,7 @@ pub struct QuotaWindow {
 }
 
 impl QuotaWindow {
-    /// In the order the provider reported them.
+    /// Response-derived exhaustion first, then measured windows in provider order.
     pub async fn list(
         database: &Database,
         source_id: Option<Id<Source>>,
@@ -59,10 +60,13 @@ impl QuotaWindow {
              quota_window.unit, quota_window.window_seconds, quota_window.resets_at, \
              quota_window.observed_at, quota_window.scope, quota_window.starts_on_use \
              FROM quota_window JOIN account ON account.account_id = quota_window.account_id \
-             WHERE ?1 IS NULL OR account.source_id = ?1 \
-             ORDER BY quota_window.account_id, quota_window.rowid",
+             WHERE (?1 IS NULL OR account.source_id = ?1) \
+             AND (window_key != ?2 OR resets_at > ?3) \
+             ORDER BY quota_window.account_id, quota_window.window_key != ?2, quota_window.rowid",
         )
         .bind(source_id)
+        .bind(WINDOW_KEY)
+        .bind(StoredTimestamp::from(Timestamp::now()))
         .fetch_all(&database.pool)
         .await?;
         let now = Timestamp::now();
@@ -90,8 +94,9 @@ impl QuotaWindow {
         .await?
         .into_iter()
         .collect::<HashMap<_, _>>();
-        sqlx::query("DELETE FROM quota_window WHERE account_id = ?")
+        sqlx::query("DELETE FROM quota_window WHERE account_id = ? AND window_key != ?")
             .bind(account_id)
+            .bind(WINDOW_KEY)
             .execute(&mut *connection)
             .await?;
         let observed_at = StoredTimestamp::from(observed_at);

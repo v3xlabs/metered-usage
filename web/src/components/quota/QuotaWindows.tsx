@@ -220,6 +220,44 @@ const ResetWindowMeter = (properties: { window: QuotaWindow; prediction: QuotaPr
   );
 };
 
+const resetMoment = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: "UTC",
+});
+
+const ResponseWindow = (properties: { window: QuotaWindow; isStale: boolean; nowMs: number; }) => {
+  const hasReset = (): boolean => properties.window.resets_at !== undefined
+    && Date.parse(properties.window.resets_at) <= properties.nowMs;
+
+  return (
+    <li class="space-y-1 text-xs">
+      <p class="text-slate-700 dark:text-slate-300">{properties.window.label}</p>
+      <p class={hasReset() ? "text-slate-500 dark:text-slate-400" : "font-medium text-red-600 dark:text-red-400"}>
+        <Show
+          when={hasReset()}
+          fallback={(
+            <>
+              Quota exhausted
+              <Show when={properties.window.resets_at}>
+                {at => `, resets ${resetMoment.format(new Date(at()))} UTC`}
+              </Show>
+            </>
+          )}
+        >
+          Quota window ended
+        </Show>
+      </p>
+      <Show when={!properties.isStale && !hasReset() ? properties.window.resets_at : undefined}>
+        {at => <p class="text-slate-500 tabular-nums dark:text-slate-400">{`Resets ${formatCountdown(at(), properties.nowMs)}`}</p>}
+      </Show>
+    </li>
+  );
+};
+
 // A window that has used nothing reports a fraction of zero, which must still draw a full bar.
 export const WindowRow = (properties: { window: QuotaWindow; isUnavailable: boolean; isStale: boolean; nowMs: number; }) => (
   <Switch
@@ -230,6 +268,9 @@ export const WindowRow = (properties: { window: QuotaWindow; isUnavailable: bool
       </li>
     )}
   >
+    <Match when={properties.window.window_key === "meta-subscription"}>
+      <ResponseWindow window={properties.window} isStale={properties.isStale} nowMs={properties.nowMs} />
+    </Match>
     {/* A turned-off credential's window reads as last known: its level does not move and its
         reset is not counted down. */}
     <Match when={properties.isStale}>
