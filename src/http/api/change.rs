@@ -23,9 +23,9 @@ pub struct ChangeApi {
 
 #[OpenApi]
 impl ChangeApi {
-    /// Changes after `cursor` to quota, resets, prices, accounts, plans and usage, oldest
-    /// first, as a long poll. With no changes, waits up to `timeout` seconds, default 30
-    /// and at most 50, and answers when a change commits.
+    /// Changes after `cursor` to quota, resets, prices, accounts, plans and usage, and
+    /// request arrivals, oldest first, as a long poll. With no changes, waits up to
+    /// `timeout` seconds, default 30 and at most 50, and answers when a change commits.
     ///
     /// `quota.updated` names an account and window whose reported values changed;
     /// `reset.updated` an account whose manual resets changed; `account.changed` an
@@ -35,15 +35,25 @@ impl ChangeApi {
     /// ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
     /// Read the usage summary and leverage again. Duplicates and rejected records alone
     /// do not emit it. Predictions can move with usage or time without a `quota.updated`.
+    /// `request.arrived` records a newly accepted request that happened in the last 24
+    /// hours, the longest `/analytics/health` window, with only `account_id` and `failed`
+    /// as subject fields. Its cursor identifies the arrival. It commits with ingestion,
+    /// after the batch's `account.changed` and in accepted-record order. Older backfilled
+    /// requests, duplicates, rejected records, repricing and account merges record none.
+    /// An `account_id` missing from `/accounts` is new: read `/accounts` again. One still
+    /// missing was merged into another account since the arrival. Read `/analytics/health`
+    /// for the request buckets.
     ///
-    /// `kinds` is a comma-separated list of the kinds to answer; without it every kind is
-    /// answered. Read on from the `cursor` of the answer, which passes over the changes
-    /// `kinds` left out.
+    /// `kinds` is a comma-separated list of the kinds to answer; without it every kind but
+    /// `request.arrived` is answered. Read on from the `cursor` of the answer, which passes
+    /// over the changes `kinds` left out.
     ///
     /// Without `cursor`, answers at once with no changes and the latest cursor: take it,
     /// read the lists, then follow from it. Changes are kept for a week. A cursor older
     /// than that, or ahead of the latest one, answers 410 with `oldest_cursor` and
     /// `latest_cursor`: read the lists again and follow from `latest_cursor`.
+    /// Answers JSON pages of at most 500 events, not SSE. Arrival cursors increase in
+    /// commit order, not request occurrence time, and can have gaps from other kinds.
     #[oai(path = "/events", method = "get", operation_id = "list_changes")]
     async fn list_changes(
         &self,
@@ -103,7 +113,7 @@ struct ChangeOutput {
     cursor: i64,
     kind: ChangeKindOutput,
     recorded_at: String,
-    /// The account of a `quota.updated`, `reset.updated` or `account.changed`.
+    /// The account of a `quota.updated`, `reset.updated`, `account.changed` or `request.arrived`.
     account_id: Option<String>,
     /// The window of a `quota.updated`.
     window_key: Option<String>,
@@ -111,22 +121,33 @@ struct ChangeOutput {
     model: Option<String>,
     /// The plan of a `plan.changed`, including after deletion.
     plan_id: Option<String>,
+    /// Present only for `request.arrived`, including false for a successful request.
+    failed: Option<bool>,
 }
 
 impl From<Change> for ChangeOutput {
     fn from(change: Change) -> Self {
         let kind = change.subject.kind().into();
-        let (account_id, window_key, model, plan_id) = match change.subject {
+        let (account_id, window_key, model, plan_id, failed) = match change.subject {
             Subject::Account(account_id) | Subject::Resets(account_id) => {
-                (Some(account_id.encode()), None, None, None)
+                (Some(account_id.encode()), None, None, None, None)
             }
             Subject::Window {
                 account_id,
                 window_key,
-            } => (Some(account_id.encode()), Some(window_key), None, None),
-            Subject::Price { model } => (None, None, Some(model), None),
-            Subject::Plan(plan_id) => (None, None, None, Some(plan_id.encode())),
-            Subject::Usage => (None, None, None, None),
+            } => (
+                Some(account_id.encode()),
+                Some(window_key),
+                None,
+                None,
+                None,
+            ),
+            Subject::Price { model } => (None, None, Some(model), None, None),
+            Subject::Plan(plan_id) => (None, None, None, Some(plan_id.encode()), None),
+            Subject::Usage => (None, None, None, None, None),
+            Subject::Arrival { account_id, failed } => {
+                (Some(account_id.encode()), None, None, None, Some(failed))
+            }
         };
         Self {
             cursor: change.cursor,
@@ -136,6 +157,7 @@ impl From<Change> for ChangeOutput {
             window_key,
             model,
             plan_id,
+            failed,
         }
     }
 }
@@ -155,6 +177,8 @@ enum ChangeKindOutput {
     PlanChanged,
     #[oai(rename = "usage.updated")]
     UsageUpdated,
+    #[oai(rename = "request.arrived")]
+    RequestArrived,
 }
 
 impl From<ChangeKind> for ChangeKindOutput {
@@ -166,6 +190,7 @@ impl From<ChangeKind> for ChangeKindOutput {
             ChangeKind::AccountChanged => Self::AccountChanged,
             ChangeKind::PlanChanged => Self::PlanChanged,
             ChangeKind::UsageUpdated => Self::UsageUpdated,
+            ChangeKind::RequestArrived => Self::RequestArrived,
         }
     }
 }
@@ -200,14 +225,21 @@ enum ChangesResponse {
     Failed(Json<Error>),
 }
 
-/// The kinds a comma-separated list names. An empty list names none, which reads as all.
+/// The kinds a comma-separated list names. An empty list names none, which reads as
+/// [`ChangeKind::DEFAULT`].
 fn change_kinds(list: Option<&str>) -> Result<Vec<ChangeKind>, UnknownChangeKind> {
-    list.unwrap_or_default()
+    let kinds = list
+        .unwrap_or_default()
         .split(',')
         .map(str::trim)
         .filter(|kind| !kind.is_empty())
         .map(str::parse)
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if kinds.is_empty() {
+        return Ok(ChangeKind::DEFAULT.to_vec());
+    }
+
+    Ok(kinds)
 }
 
 fn failure(error: &DatabaseError) -> Error {

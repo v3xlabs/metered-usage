@@ -1,7 +1,8 @@
 //! One shared token guards everything that reads or writes usage. A client presents it as
 //! a bearer token, or as the session cookie a browser was given for it. Two optional tokens
 //! read less: one every `GET`, for a dashboard, and one only what another service needs to
-//! follow quota, resets, prices, accounts, usage summaries, plans and account health.
+//! follow quota, resets, prices, accounts, usage summaries, plans, account health and
+//! request arrivals.
 
 use std::sync::Arc;
 
@@ -40,8 +41,8 @@ pub struct Credentials {
     /// Admits every `GET`, for a dashboard such as Grafana.
     pub read_token: Option<Token>,
     /// Admits only the `GET`s of [`CONSUMER_READS`], for a service such as Kettle Code that
-    /// follows quota, prices, aggregate usage, plans and account health counts, but cannot
-    /// read request records.
+    /// follows quota, prices, aggregate usage, plans, account health counts and request
+    /// arrivals, but cannot read request records.
     pub consumer_token: Option<Token>,
 }
 

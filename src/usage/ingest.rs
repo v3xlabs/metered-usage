@@ -1,8 +1,10 @@
 //! How a batch of normalized records from any gateway becomes stored events.
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
+use sqlx::SqliteConnection;
 
 use crate::account::Account;
+use crate::analytics::health::MAX_WINDOW_MINUTES;
 use crate::app::AppState;
 use crate::change::snapshot::{Scope, Snapshot};
 use crate::change::{Change, Subject};
@@ -23,6 +25,11 @@ const INSERT: &str = "INSERT INTO usage_event (event_id, source_id, account_id, 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
      ?, ?, ?) \
      ON CONFLICT (source_id, record_hash) DO NOTHING";
+
+/// How old a request may be and still record a `request.arrived`: the longest window
+/// `/analytics/health` reads. A backfill, such as a LiteLLM source's first 30-day poll,
+/// records no arrival for the rest, so a consumer does not animate charges no strip shows.
+const ARRIVAL_WINDOW: SignedDuration = SignedDuration::from_mins(MAX_WINDOW_MINUTES as i64);
 
 /// One record as a normalizer handed it over.
 #[derive(Debug)]
@@ -97,6 +104,9 @@ pub async fn ingest(
     let received_at = Timestamp::now();
     let mut report = IngestReport::default();
     let mut stored = Vec::with_capacity(records.len());
+    // The account and outcome of each request that records an arrival.
+    let mut arrivals = Vec::new();
+    let arrivals_since = received_at - ARRIVAL_WINDOW;
     let mut is_new_credential = false;
     let mut transaction = database.write().await?;
     let snapshot = if records
@@ -137,49 +147,23 @@ pub async fn ingest(
         .await?;
         is_new_credential |= account_id == candidate && !event.account.upstream_key.is_empty();
         let id = database.ids.next::<UsageEvent>();
-        let inserted = sqlx::query(INSERT)
-            .bind(id)
-            .bind(source_id)
-            .bind(account_id)
-            .bind(event.record_hash())
-            .bind(&event.upstream_id)
-            .bind(StoredTimestamp::from(event.occurred_at))
-            .bind(&event.provider)
-            .bind(&event.model)
-            .bind(&event.model_alias)
-            .bind(&event.endpoint)
-            .bind(&event.caller)
-            .bind(&event.harness)
-            .bind(&event.user_agent)
-            .bind(&event.session_id)
-            .bind(event.input_tokens)
-            .bind(event.output_tokens)
-            .bind(event.reasoning_tokens)
-            .bind(event.cache_read_tokens)
-            .bind(event.cache_write_tokens)
-            .bind(event.unclassified_tokens)
-            .bind(event.total_tokens)
-            .bind(event.token_quality)
-            .bind(event.latency_ms)
-            .bind(event.ttft_ms)
-            .bind(event.streamed)
-            .bind(event.status_code)
-            .bind(event.failed)
-            .bind(&event.error_message)
-            .bind(&event.service_tier)
-            .bind(&event.reasoning_effort)
-            .bind(event.billed_cost_usd)
-            .execute(&mut *transaction)
-            .await?;
-        if inserted.rows_affected() > 0 {
+        if insert(&mut transaction, id, source_id, account_id, &event).await? {
             quota::response::observe(&mut transaction, account_id, &event, received_at).await?;
+            if event.occurred_at >= arrivals_since {
+                arrivals.push((account_id, event.failed));
+            }
             stored.push(id);
             report.accepted += 1;
         } else {
             report.duplicates += 1;
         }
     }
+    // After the account changes, so a new account's `account.changed` comes before the
+    // first arrival that names it.
     snapshot.record_changes(&mut transaction).await?;
+    for (account_id, failed) in arrivals {
+        Change::record(&mut transaction, &Subject::Arrival { account_id, failed }).await?;
+    }
     if report.accepted > 0 {
         Change::record(&mut transaction, &Subject::Usage).await?;
     }
@@ -190,6 +174,51 @@ pub async fn ingest(
     publish(state, &stored).await;
 
     Ok(report)
+}
+
+/// Stores one event, and answers whether it was new rather than a duplicate.
+async fn insert(
+    connection: &mut SqliteConnection,
+    id: Id<UsageEvent>,
+    source_id: Id<Source>,
+    account_id: Id<Account>,
+    event: &NewUsageEvent,
+) -> Result<bool, DatabaseError> {
+    let inserted = sqlx::query(INSERT)
+        .bind(id)
+        .bind(source_id)
+        .bind(account_id)
+        .bind(event.record_hash())
+        .bind(&event.upstream_id)
+        .bind(StoredTimestamp::from(event.occurred_at))
+        .bind(&event.provider)
+        .bind(&event.model)
+        .bind(&event.model_alias)
+        .bind(&event.endpoint)
+        .bind(&event.caller)
+        .bind(&event.harness)
+        .bind(&event.user_agent)
+        .bind(&event.session_id)
+        .bind(event.input_tokens)
+        .bind(event.output_tokens)
+        .bind(event.reasoning_tokens)
+        .bind(event.cache_read_tokens)
+        .bind(event.cache_write_tokens)
+        .bind(event.unclassified_tokens)
+        .bind(event.total_tokens)
+        .bind(event.token_quality)
+        .bind(event.latency_ms)
+        .bind(event.ttft_ms)
+        .bind(event.streamed)
+        .bind(event.status_code)
+        .bind(event.failed)
+        .bind(&event.error_message)
+        .bind(&event.service_tier)
+        .bind(&event.reasoning_effort)
+        .bind(event.billed_cost_usd)
+        .execute(connection)
+        .await?;
+    Ok(inserted.rows_affected() > 0)
 }
 
 /// The batch is already committed, so a stream that misses it here finds it in the

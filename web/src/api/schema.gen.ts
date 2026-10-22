@@ -344,6 +344,10 @@ export interface paths {
          *     of `bucket_minutes` aligned to whole multiples of it since the Unix epoch. Every
          *     account has every bucket, oldest first, the last one holding now. An account with
          *     no request in the window is present only when `account_id` names it.
+         *     Available to the consumer token. Defaults to 60 minutes in 5-minute buckets.
+         *     Read `/accounts` and pass its ids as comma-separated `account_id` values to include
+         *     inactive accounts as zero-filled strips. The window must be 5 to 1440 minutes,
+         *     divisible by the bucket width, with at most 288 buckets and a width of at least 1.
          */
         get: operations["analytics_health"];
         put?: never;
@@ -603,9 +607,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Changes after `cursor` to quota, resets, prices, accounts, plans and usage, oldest
-         *     first, as a long poll. With no changes, waits up to `timeout` seconds, default 30
-         *     and at most 50, and answers when a change commits.
+         * Changes after `cursor` to quota, resets, prices, accounts, plans and usage, and
+         *     request arrivals, oldest first, as a long poll. With no changes, waits up to
+         *     `timeout` seconds, default 30 and at most 50, and answers when a change commits.
          * @description `quota.updated` names an account and window whose reported values changed;
          *     `reset.updated` an account whose manual resets changed; `account.changed` an
          *     account whose names, CLIProxy state or last hard refresh changed; `price.changed`
@@ -614,15 +618,25 @@ export interface paths {
          *     ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
          *     Read the usage summary and leverage again. Duplicates and rejected records alone
          *     do not emit it. Predictions can move with usage or time without a `quota.updated`.
+         *     `request.arrived` records a newly accepted request that happened in the last 24
+         *     hours, the longest `/analytics/health` window, with only `account_id` and `failed`
+         *     as subject fields. Its cursor identifies the arrival. It commits with ingestion,
+         *     after the batch's `account.changed` and in accepted-record order. Older backfilled
+         *     requests, duplicates, rejected records, repricing and account merges record none.
+         *     An `account_id` missing from `/accounts` is new: read `/accounts` again. One still
+         *     missing was merged into another account since the arrival. Read `/analytics/health`
+         *     for the request buckets.
          *
-         *     `kinds` is a comma-separated list of the kinds to answer; without it every kind is
-         *     answered. Read on from the `cursor` of the answer, which passes over the changes
-         *     `kinds` left out.
+         *     `kinds` is a comma-separated list of the kinds to answer; without it every kind but
+         *     `request.arrived` is answered. Read on from the `cursor` of the answer, which passes
+         *     over the changes `kinds` left out.
          *
          *     Without `cursor`, answers at once with no changes and the latest cursor: take it,
          *     read the lists, then follow from it. Changes are kept for a week. A cursor older
          *     than that, or ahead of the latest one, answers 410 with `oldest_cursor` and
          *     `latest_cursor`: read the lists again and follow from `latest_cursor`.
+         *     Answers JSON pages of at most 500 events, not SSE. Arrival cursors increase in
+         *     commit order, not request occurrence time, and can have gaps from other kinds.
          */
         get: operations["list_changes"];
         put?: never;
@@ -774,7 +788,7 @@ export interface components {
             cursor: number;
             kind: components["schemas"]["ChangeKind"];
             recorded_at: string;
-            /** @description The account of a `quota.updated`, `reset.updated` or `account.changed`. */
+            /** @description The account of a `quota.updated`, `reset.updated`, `account.changed` or `request.arrived`. */
             account_id?: string;
             /** @description The window of a `quota.updated`. */
             window_key?: string;
@@ -782,6 +796,8 @@ export interface components {
             model?: string;
             /** @description The plan of a `plan.changed`, including after deletion. */
             plan_id?: string;
+            /** @description Present only for `request.arrived`, including false for a successful request. */
+            failed?: boolean;
         };
         /** ChangeEvents */
         ChangeEvents: {
@@ -793,7 +809,7 @@ export interface components {
             cursor: number;
         };
         /** @enum {string} */
-        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed" | "plan.changed" | "usage.updated";
+        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed" | "plan.changed" | "usage.updated" | "request.arrived";
         /** ChangesExpired */
         ChangesExpired: {
             message: string;

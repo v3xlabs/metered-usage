@@ -1,7 +1,7 @@
 //! Changes to the quota, resets, prices, accounts, plans and usage other services read.
 //!
 //! Each change commits with its write, in cursor order. Usage records one invalidation
-//! per changed batch rather than one per request. It names no client or request.
+//! per changed batch and one narrow arrival per accepted request.
 
 pub mod snapshot;
 
@@ -22,7 +22,7 @@ use crate::prelude::*;
 
 /// How long a change is kept. A reader whose cursor is older has to read the lists again,
 /// so this is the longest a consumer can be away and still catch up: a week covers a
-/// service that was down over a weekend. Usage invalidations share this retention.
+/// service that was down over a weekend. Usage invalidations and arrivals share this retention.
 pub const RETENTION: SignedDuration = SignedDuration::from_hours(7 * 24);
 /// The most changes one read answers. The public price map read for the first time records
 /// one change per model, about 3500, so a reader catches up in a few reads.
@@ -38,9 +38,10 @@ pub enum ChangeKind {
     AccountChanged,
     PlanChanged,
     UsageUpdated,
+    RequestArrived,
 }
 
-/// What changed, and so which list to read again.
+/// What changed, or which account received a request.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Subject {
     /// What the account and quota lists say about the account itself: its names, its
@@ -60,6 +61,11 @@ pub enum Subject {
     Plan(Id<Plan>),
     /// Usage counts or stored costs changed. Read the summary and leverage again.
     Usage,
+    /// One newly accepted request. The change cursor identifies its arrival.
+    Arrival {
+        account_id: Id<Account>,
+        failed: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -102,17 +108,29 @@ struct StoredChange {
     window_key: Option<String>,
     model: Option<String>,
     plan_id: Option<Id<Plan>>,
+    failed: Option<bool>,
     recorded_at: StoredTimestamp,
 }
 
 impl ChangeKind {
-    pub const ALL: [Self; 6] = [
+    /// What a read without `kinds` answers: every kind but `request.arrived`, which has one
+    /// change per request and is answered only when `kinds` names it.
+    pub const DEFAULT: [Self; 6] = [
         Self::QuotaUpdated,
         Self::ResetUpdated,
         Self::PriceChanged,
         Self::AccountChanged,
         Self::PlanChanged,
         Self::UsageUpdated,
+    ];
+    pub const ALL: [Self; 7] = [
+        Self::QuotaUpdated,
+        Self::ResetUpdated,
+        Self::PriceChanged,
+        Self::AccountChanged,
+        Self::PlanChanged,
+        Self::UsageUpdated,
+        Self::RequestArrived,
     ];
 
     #[must_use]
@@ -124,6 +142,7 @@ impl ChangeKind {
             Self::AccountChanged => "account.changed",
             Self::PlanChanged => "plan.changed",
             Self::UsageUpdated => "usage.updated",
+            Self::RequestArrived => "request.arrived",
         }
     }
 }
@@ -155,6 +174,7 @@ impl Subject {
             Self::Price { .. } => ChangeKind::PriceChanged,
             Self::Plan(_) => ChangeKind::PlanChanged,
             Self::Usage => ChangeKind::UsageUpdated,
+            Self::Arrival { .. } => ChangeKind::RequestArrived,
         }
     }
 }
@@ -162,27 +182,37 @@ impl Subject {
 impl Change {
     /// Records the change in the write's transaction, so it commits with what changed.
     pub async fn record(write: &mut Write<'_>, subject: &Subject) -> Result<(), DatabaseError> {
-        let (account_id, window_key, model, plan_id) = match subject {
+        let (account_id, window_key, model, plan_id, failed) = match subject {
             Subject::Account(account_id) | Subject::Resets(account_id) => {
-                (Some(*account_id), None, None, None)
+                (Some(*account_id), None, None, None, None)
             }
             Subject::Window {
                 account_id,
                 window_key,
-            } => (Some(*account_id), Some(window_key.as_str()), None, None),
-            Subject::Price { model } => (None, None, Some(model.as_str()), None),
-            Subject::Plan(plan_id) => (None, None, None, Some(*plan_id)),
-            Subject::Usage => (None, None, None, None),
+            } => (
+                Some(*account_id),
+                Some(window_key.as_str()),
+                None,
+                None,
+                None,
+            ),
+            Subject::Price { model } => (None, None, Some(model.as_str()), None, None),
+            Subject::Plan(plan_id) => (None, None, None, Some(*plan_id), None),
+            Subject::Usage => (None, None, None, None, None),
+            Subject::Arrival { account_id, failed } => {
+                (Some(*account_id), None, None, None, Some(*failed))
+            }
         };
         sqlx::query(
-            "INSERT INTO change (kind, account_id, window_key, model, plan_id, recorded_at) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO change (kind, account_id, window_key, model, plan_id, failed, recorded_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(subject.kind().stored())
         .bind(account_id)
         .bind(window_key)
         .bind(model)
         .bind(plan_id)
+        .bind(failed)
         .bind(StoredTimestamp::from(Timestamp::now()))
         .execute(&mut **write)
         .await?;
@@ -226,7 +256,7 @@ impl Change {
                 .to_string()
         });
         let changes = sqlx::query_as::<_, StoredChange>(
-            "SELECT cursor, kind, account_id, window_key, model, plan_id, recorded_at FROM change \
+            "SELECT cursor, kind, account_id, window_key, model, plan_id, failed, recorded_at FROM change \
              WHERE cursor > ?1 AND (?2 IS NULL OR kind IN (SELECT value FROM json_each(?2))) \
              ORDER BY cursor LIMIT ?3",
         )
@@ -303,13 +333,14 @@ impl TryFrom<StoredChange> for Change {
         let unreadable = || DatabaseError::Unreadable {
             field: "change",
             value: format!(
-                "{} {} {:?} {:?} {:?} {:?}",
+                "{} {} {:?} {:?} {:?} {:?} {:?}",
                 stored.cursor,
                 stored.kind,
                 stored.account_id,
                 stored.window_key,
                 stored.model,
-                stored.plan_id
+                stored.plan_id,
+                stored.failed
             ),
         };
         let kind = stored
@@ -322,24 +353,30 @@ impl TryFrom<StoredChange> for Change {
             &stored.window_key,
             &stored.model,
             stored.plan_id,
+            stored.failed,
         ) {
-            (ChangeKind::AccountChanged, Some(account_id), None, None, None) => {
+            (ChangeKind::AccountChanged, Some(account_id), None, None, None, None) => {
                 Subject::Account(account_id)
             }
-            (ChangeKind::QuotaUpdated, Some(account_id), Some(window_key), None, None) => {
+            (ChangeKind::QuotaUpdated, Some(account_id), Some(window_key), None, None, None) => {
                 Subject::Window {
                     account_id,
                     window_key: window_key.clone(),
                 }
             }
-            (ChangeKind::ResetUpdated, Some(account_id), None, None, None) => {
+            (ChangeKind::ResetUpdated, Some(account_id), None, None, None, None) => {
                 Subject::Resets(account_id)
             }
-            (ChangeKind::PriceChanged, None, None, Some(model), None) => Subject::Price {
+            (ChangeKind::PriceChanged, None, None, Some(model), None, None) => Subject::Price {
                 model: model.clone(),
             },
-            (ChangeKind::PlanChanged, None, None, None, Some(plan_id)) => Subject::Plan(plan_id),
-            (ChangeKind::UsageUpdated, None, None, None, None) => Subject::Usage,
+            (ChangeKind::PlanChanged, None, None, None, Some(plan_id), None) => {
+                Subject::Plan(plan_id)
+            }
+            (ChangeKind::UsageUpdated, None, None, None, None, None) => Subject::Usage,
+            (ChangeKind::RequestArrived, Some(account_id), None, None, None, Some(failed)) => {
+                Subject::Arrival { account_id, failed }
+            }
             _ => return Err(unreadable()),
         };
 

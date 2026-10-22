@@ -842,70 +842,88 @@ async fn the_read_token_reads_and_never_writes() {
 async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_account_health() {
     let gateway = gateway().await.expect("a gateway");
     let bearer = format!("Bearer {CONSUMER_TOKEN}");
+    // Each read the consumer token is admitted to, with a query that makes it answer 200.
+    let admitted = [
+        ("/events", ""),
+        ("/quota", ""),
+        ("/prices", "?model=claude-sonnet-4"),
+        ("/accounts", ""),
+        (
+            "/usage/summary",
+            "?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z&step=day",
+        ),
+        ("/plans", ""),
+        ("/leverage", ""),
+        ("/analytics/health", ""),
+    ];
+    // Operations every caller reaches, with or without a credential.
+    let open = [
+        ("get", "/health"),
+        ("get", "/session"),
+        ("post", "/session"),
+    ];
 
-    for path in [
-        "/api/events",
-        "/api/quota",
-        "/api/prices?model=claude-sonnet-4",
-        "/api/accounts",
-        "/api/usage/summary?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z&step=day",
-        "/api/plans",
-        "/api/leverage",
-        "/api/analytics/health",
-    ] {
-        let response = gateway
-            .anonymous
-            .get(path)
-            .header(header::AUTHORIZATION, &bearer)
-            .send()
-            .await;
-        assert_eq!(response.0.status(), StatusCode::OK, "{path}");
+    let document = gateway.anonymous.get("/openapi.json").send().await;
+    document.assert_status_is_ok();
+    let document = document.json().await.value().deserialize::<Value>();
+    let paths = document["paths"].as_object().expect("the document's paths");
+    for (path, _) in admitted {
+        assert!(paths[path]["get"].is_object(), "{path} is no operation");
     }
-    for path in [
-        "/api/usage/events",
-        "/api/usage/stream",
-        "/api/analytics/summary",
-        "/api/analytics/series",
-        "/api/analytics/breakdown",
-        "/api/analytics/sessions",
-        "/api/analytics/requests",
-        "/api/analytics/dimensions",
-        "/api/sources",
-        "/mcp",
-    ] {
-        let response = gateway
-            .anonymous
-            .get(path)
-            .header(header::AUTHORIZATION, &bearer)
-            .send()
-            .await;
-        assert_eq!(response.0.status(), StatusCode::UNAUTHORIZED, "{path}");
+    for (path, operations) in paths {
+        // A dummy id stands in for every path parameter.
+        let concrete = path
+            .split('/')
+            .map(|part| {
+                if part.starts_with('{') {
+                    "00000000001"
+                } else {
+                    part
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        for method in operations
+            .as_object()
+            .expect("the path's operations")
+            .keys()
+        {
+            if open.contains(&(method.as_str(), path.as_str())) {
+                continue;
+            }
+            let query = admitted
+                .iter()
+                .find(|(read, _)| method == "get" && read == path)
+                .map(|(_, query)| *query);
+            let uri = format!("/api{concrete}{}", query.unwrap_or_default());
+            let request = match method.as_str() {
+                "get" => gateway.anonymous.get(&uri),
+                "post" => gateway.anonymous.post(&uri),
+                "patch" => gateway.anonymous.patch(&uri),
+                "put" => gateway.anonymous.put(&uri),
+                "delete" => gateway.anonymous.delete(&uri),
+                other => panic!("{other} {path} is a method this test does not send"),
+            };
+            let response = request
+                .header(header::AUTHORIZATION, &bearer)
+                .body_json(&json!({}))
+                .send()
+                .await;
+            let expected = if query.is_some() {
+                StatusCode::OK
+            } else {
+                StatusCode::UNAUTHORIZED
+            };
+            assert_eq!(response.0.status(), expected, "{method} {uri}");
+        }
     }
-    for path in [
-        "/api/quota/refresh",
-        "/api/quota/reset",
-        "/api/prices/sync",
-        "/api/prices",
-        "/api/plans",
-        "/api/usage/summary",
-    ] {
-        let response = gateway
-            .anonymous
-            .post(path)
-            .header(header::AUTHORIZATION, &bearer)
-            .body_json(&json!({}))
-            .send()
-            .await;
-        assert_eq!(response.0.status(), StatusCode::UNAUTHORIZED, "{path}");
-    }
-    let rename = gateway
+    let mcp = gateway
         .anonymous
-        .patch("/api/accounts/00000000001")
+        .get("/mcp")
         .header(header::AUTHORIZATION, &bearer)
-        .body_json(&json!({ "display_name": "renamed" }))
         .send()
         .await;
-    assert_eq!(rename.0.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(mcp.0.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

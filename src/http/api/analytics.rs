@@ -370,6 +370,10 @@ impl AnalyticsApi {
     /// of `bucket_minutes` aligned to whole multiples of it since the Unix epoch. Every
     /// account has every bucket, oldest first, the last one holding now. An account with
     /// no request in the window is present only when `account_id` names it.
+    /// Available to the consumer token. Defaults to 60 minutes in 5-minute buckets.
+    /// Read `/accounts` and pass its ids as comma-separated `account_id` values to include
+    /// inactive accounts as zero-filled strips. The window must be 5 to 1440 minutes,
+    /// divisible by the bucket width, with at most 288 buckets and a width of at least 1.
     #[oai(
         path = "/analytics/health",
         method = "get",

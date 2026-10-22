@@ -1,3 +1,6 @@
+#[path = "usage_changes/activity.rs"]
+mod activity;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -201,6 +204,10 @@ async fn fills_and_reprices_invalidate_usage_costs_once_per_transaction() {
         .await
         .unwrap();
     assert!((cost - 0.001).abs() < 1e-12);
+    assert_eq!(
+        changes(&client, cursor, "request.arrived").await["events"],
+        json!([])
+    );
 }
 
 #[tokio::test]
@@ -250,6 +257,10 @@ async fn an_account_merge_invalidates_account_grouping_and_moved_plans() {
         .await
         .unwrap();
     assert_eq!(count, 2);
+    assert_eq!(
+        changes(&client, cursor, "request.arrived").await["events"],
+        json!([])
+    );
 }
 
 #[tokio::test]
@@ -288,14 +299,16 @@ async fn usage_changes_share_the_feed_retention_and_ingest_rollback() {
     )
     .await
     .unwrap();
-    let response = client
-        .get(format!(
-            "/api/events?cursor={cursor}&kinds=usage.updated&timeout=0"
-        ))
-        .send()
-        .await;
-    response.assert_status(StatusCode::GONE);
-    let answer = response.json().await.value().deserialize::<Value>();
-    assert_eq!(answer["latest_cursor"], latest);
-    assert_eq!(answer["oldest_cursor"], latest);
+    for kind in ["usage.updated", "request.arrived"] {
+        let response = client
+            .get(format!(
+                "/api/events?cursor={cursor}&kinds={kind}&timeout=0"
+            ))
+            .send()
+            .await;
+        response.assert_status(StatusCode::GONE);
+        let answer = response.json().await.value().deserialize::<Value>();
+        assert_eq!(answer["latest_cursor"], latest);
+        assert_eq!(answer["oldest_cursor"], latest);
+    }
 }
