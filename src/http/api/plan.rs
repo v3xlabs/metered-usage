@@ -103,6 +103,10 @@ pub struct PlanOutput {
     monthly_usd: f64,
     period_start: String,
     period_end: Option<String>,
+    /// The credential that replaced the plan's account, same rule and meaning as on an
+    /// account of `/accounts`. The plan stays on `account`; its leverage counts the
+    /// replacement's requests too. Absent when nothing is known to have replaced it.
+    replaced_by_account_id: Option<String>,
 }
 
 impl From<Plan> for PlanOutput {
@@ -114,6 +118,7 @@ impl From<Plan> for PlanOutput {
             monthly_usd: plan.monthly_usd,
             period_start: plan.period_start.to_string(),
             period_end: plan.period_end.map(|end| end.0.to_string()),
+            replaced_by_account_id: plan.replaced_by_account_id.map(Id::encode),
         }
     }
 }

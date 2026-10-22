@@ -29,8 +29,10 @@ impl ChangeApi {
     ///
     /// `quota.updated` names an account and window whose reported values changed;
     /// `reset.updated` an account whose manual resets changed; `account.changed` an
-    /// account whose names, CLIProxy state or last hard refresh changed; `price.changed`
-    /// a model whose latest price changed; `plan.changed` a plan added, edited or removed.
+    /// account whose names, CLIProxy state, last hard refresh or `replaced_by_account_id`
+    /// changed; `price.changed` a model whose latest price changed; `plan.changed` a plan
+    /// added, edited, removed, moved to another account or whose account's
+    /// `replaced_by_account_id` changed.
     /// `usage.updated` has no subject fields. It is coalesced to one event per accepted
     /// ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
     /// Read the usage summary and leverage again. Duplicates and rejected records alone

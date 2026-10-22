@@ -56,6 +56,18 @@ export const isEnded = (plan: Plan, nowMs: number): boolean =>
 // The plan the card leads with: the one running now, or else the latest.
 export const shownHistory = (entry: AccountLeverage): PlanHistory | undefined => entry.active ?? entry.histories.at(0);
 
+// The plans a continuation keeps: the previous sign-in's, which a linked plan has already left
+// for the new one's card.
+export const continuedPlans = (previous: AccountLeverage, replacement: AccountLeverage): readonly Plan[] =>
+  (previous.histories.length > 0 ? previous : replacement).histories.map(history => history.plan);
+
+export const continuedPlan = (previous: AccountLeverage, replacement: AccountLeverage): Plan | undefined =>
+  (shownHistory(previous) ?? shownHistory(replacement))?.plan;
+
+// The server shows the previous sign-in's plan on the new one, so only history is left to combine.
+export const isLinked = (previous: AccountLeverage, replacement: AccountLeverage): boolean =>
+  previous.account.replaced_by_account_id === replacement.account.account_id;
+
 // A retired card does not show its detected plan, so that plan does not rank it.
 const standing = (entry: AccountLeverage): number => {
   const isEntryRetired = isRetired(entry.account);

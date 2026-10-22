@@ -19,6 +19,8 @@ export const PlanSettings = (properties: {
   account: Account;
   /** Newest first. */
   plans: readonly Plan[];
+  /** The plans shown are those of the removed sign-in this one replaced. */
+  isPlanOfPreviousSignIn: boolean;
   nowMs: number;
   onEdit: (editing: PlanEditing) => void;
   onChanged: () => void;
@@ -157,14 +159,19 @@ export const PlanSettings = (properties: {
           <Show when={failure()}>
             {message => <p class="px-2.5 py-2 text-sm text-red-600 dark:text-red-400" role="alert">{redact(message())}</p>}
           </Show>
-          <button
-            type="button"
-            onClick={() => edit({ plan: undefined, suggestedName: undefined })}
-            class="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-left font-medium text-emerald-700 hover:bg-raised dark:text-emerald-400"
+          <Show
+            when={!properties.isPlanOfPreviousSignIn}
+            fallback={<p class="px-2.5 py-2 text-xs text-slate-600 dark:text-slate-400">These plans are the previous sign-in's. To add a plan here, combine their request history first, or choose They are different plans.</p>}
           >
-            <TbOutlinePlus size={15} aria-hidden="true" />
-            Add plan for this account
-          </button>
+            <button
+              type="button"
+              onClick={() => edit({ plan: undefined, suggestedName: undefined })}
+              class="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-left font-medium text-emerald-700 hover:bg-raised dark:text-emerald-400"
+            >
+              <TbOutlinePlus size={15} aria-hidden="true" />
+              Add plan for this account
+            </button>
+          </Show>
         </Popover.Content>
       </Popover.Portal>
     </Popover>

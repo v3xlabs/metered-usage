@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, Errored, For, Loading, refresh,
 
 import { listAccounts } from "../api/accounts";
 import { fetchLeverage } from "../api/leverage";
+import type { Plan } from "../api/plans";
 import { listPlans } from "../api/plans";
 import { fetchQuota } from "../api/quota";
 import { AccountLeverageCard } from "../components/leverage/AccountLeverageCard";
@@ -11,7 +12,7 @@ import type { PlanContinuation, PlanDecision } from "../components/leverage/Plan
 import { RegionFailure, RegionPending } from "../components/Region";
 import { accountsNeedingSource, isRetired } from "../domain/account";
 import type { AccountLeverage } from "../domain/leverage";
-import { byStanding, hasHistory, isActive } from "../domain/leverage";
+import { byStanding, hasHistory, isActive, isLinked } from "../domain/leverage";
 
 export const PlanLeveragePage = () => {
   const accounts = createMemo(() => listAccounts());
@@ -41,17 +42,26 @@ export const PlanLeveragePage = () => {
 
   const periodsByPlan = createMemo(() => new Map(leverage().map(entry => [entry.plan.plan_id, entry.periods])));
 
-  const entries = createMemo((): readonly AccountLeverage[] =>
-    accounts()
+  // A plan the server says a listed credential replaced shows on that credential, where the
+  // requests now go. It stays on its own credential in the API until a merge.
+  const entries = createMemo((): readonly AccountLeverage[] => {
+    const listed = new Set(accounts().map(account => account.account_id));
+    const shownOn = (plan: Plan): string =>
+      (plan.replaced_by_account_id !== undefined && listed.has(plan.replaced_by_account_id)
+        ? plan.replaced_by_account_id
+        : plan.account.account_id);
+
+    return accounts()
       .map((account) => {
         const histories = plans()
-          .filter(plan => plan.account.account_id === account.account_id)
+          .filter(plan => shownOn(plan) === account.account_id)
           .toSorted((left, right) => Date.parse(right.period_start) - Date.parse(left.period_start))
           .map(plan => ({ plan, periods: periodsByPlan().get(plan.plan_id) ?? [] }));
 
         return { account, histories, active: histories.find(history => isActive(history.plan, nowMs)) };
       })
-      .toSorted(byStanding));
+      .toSorted(byStanding);
+  });
 
   const continuations = createMemo((): readonly PlanContinuation[] => entries().flatMap(previous =>
     previous.account.plan_continuation_account_ids.flatMap((accountId) => {
@@ -81,10 +91,15 @@ export const PlanLeveragePage = () => {
   const decisionSaved = async (saved: PlanDecision, isStale: boolean): Promise<void> => {
     await reload();
     setDecision(undefined);
-    setSelectedAccountId(saved.continuation.replacement.account.account_id);
+    const { previous, replacement } = saved.continuation;
+
+    // A dismissed link sends the plan back to the previous sign-in, so that card is the one to show.
+    setSelectedAccountId((saved.action === "dismiss" && isLinked(previous, replacement) ? previous : replacement).account.account_id);
 
     if (isStale) setNotice("The sign-ins changed. The plans below are up to date.");
-    else setNotice(saved.action === "merge" ? "Sign-in history combined." : "Suggestion dismissed. The plans stay separate.");
+    else if (saved.action === "merge") setNotice("Sign-in history combined.");
+    else if (isLinked(previous, replacement)) setNotice("Suggestion dismissed. The plan moved back to the previous sign-in.");
+    else setNotice("Suggestion dismissed. The plans stay separate.");
   };
 
   const decide = (next: PlanDecision): void => {
@@ -95,7 +110,9 @@ export const PlanLeveragePage = () => {
   const card = (entry: AccountLeverage) => (
     <AccountLeverageCard
       entry={entry}
-      continuations={continuations().filter(pair => pair.previous === entry || pair.replacement === entry)}
+      continuations={continuations().filter(pair => pair.replacement === entry || (pair.previous === entry && !isLinked(pair.previous, pair.replacement)))}
+      successor={entries().find(other => isLinked(entry, other))}
+      predecessor={entries().find(other => isLinked(other, entry))}
       isSourceShown={needingSource().has(entry.account.account_id)}
       isSelected={selected()?.account.account_id === entry.account.account_id}
       nowMs={nowMs}
@@ -140,7 +157,7 @@ export const PlanLeveragePage = () => {
               <Show when={folded().length > 0}>
                 <details>
                   <summary class="cursor-pointer py-1 text-xs text-slate-500 select-none hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                    {`${folded().length} ${folded().length === 1 ? "credential" : "credentials"} disabled or no longer listed by CLIProxy, without a plan`}
+                    {`${folded().length} ${folded().length === 1 ? "credential" : "credentials"} disabled or no longer listed by CLIProxy`}
                   </summary>
                   <ul class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <For each={folded()}>{entry => card(entry)}</For>

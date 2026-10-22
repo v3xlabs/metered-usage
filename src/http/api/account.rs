@@ -204,6 +204,12 @@ struct AccountOutput {
     credentials: Vec<CredentialOutput>,
     /// Advisory replacements of this removed credential, excluding dismissed pairs.
     plan_continuation_account_ids: Vec<String>,
+    /// The one credential that replaced this removed one. Present only while no other
+    /// credential of the same source, provider, sign-in kind and label could have, the
+    /// pair is not dismissed and the replacement has no plan of its own. Derived on every
+    /// read, so it appears and goes with `account.changed`. Fold the plan history onto
+    /// the successor; the history stays on this account until a merge.
+    replaced_by_account_id: Option<String>,
 }
 
 impl From<Account> for AccountOutput {
@@ -237,6 +243,7 @@ impl From<Account> for AccountOutput {
                 .into_iter()
                 .map(Id::encode)
                 .collect(),
+            replaced_by_account_id: account.replaced_by_account_id.map(Id::encode),
         }
     }
 }

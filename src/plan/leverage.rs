@@ -34,12 +34,13 @@ impl PlanLeverage {
                      CASE WHEN SUM(total_tokens) > 0 \
                          THEN ?1 * 1e6 / SUM(total_tokens) END AS effective_usd_per_mtok \
                      FROM usage_event \
-                     WHERE account_id = ?2 AND occurred_at >= ?3 AND occurred_at < ?4",
+                     WHERE account_id IN (?2, ?5) AND occurred_at >= ?3 AND occurred_at < ?4",
                 )
                 .bind(plan.monthly_usd)
                 .bind(plan.account.id)
                 .bind(StoredTimestamp::from(start))
                 .bind(StoredTimestamp::from(end))
+                .bind(plan.replaced_by_account_id)
                 .fetch_one(&database.pool)
                 .await?;
                 billed.push(BillingPeriod {

@@ -100,6 +100,9 @@ impl Account {
                 account
                     .plan_continuation_account_ids
                     .push(suggestion.replacement);
+                if suggestion.is_replacement {
+                    account.replaced_by_account_id = Some(suggestion.replacement);
+                }
             }
         }
         Ok(())

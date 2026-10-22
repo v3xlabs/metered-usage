@@ -192,6 +192,10 @@ const WindowValues = (properties: { windows: readonly QuotaWindow[]; }) => {
 export const AccountLeverageCard = (properties: {
   entry: AccountLeverage;
   continuations: readonly PlanContinuation[];
+  /** The sign-in that replaced this one, whose card now holds this one's plan. */
+  successor: AccountLeverage | undefined;
+  /** The removed sign-in whose plan this card shows. */
+  predecessor: AccountLeverage | undefined;
   isSourceShown: boolean;
   isSelected: boolean;
   nowMs: number;
@@ -228,13 +232,16 @@ export const AccountLeverageCard = (properties: {
           <AccountName account={properties.entry.account} isSourceShown={properties.isSourceShown} />
           <AuthKindIcon authKind={properties.entry.account.auth_kind} />
         </span>
-        <PlanSettings
-          account={properties.entry.account}
-          plans={properties.entry.histories.map(history => history.plan)}
-          nowMs={properties.nowMs}
-          onEdit={setEditing}
-          onChanged={properties.onChanged}
-        />
+        <Show when={properties.successor === undefined}>
+          <PlanSettings
+            account={properties.entry.account}
+            plans={properties.entry.histories.map(history => history.plan)}
+            isPlanOfPreviousSignIn={properties.predecessor !== undefined}
+            nowMs={properties.nowMs}
+            onEdit={setEditing}
+            onChanged={properties.onChanged}
+          />
+        </Show>
       </div>
       <Show when={properties.continuations.length > 0}>
         <p class="text-xs text-slate-600 dark:text-slate-400">{signInDescription(properties.entry.account)}</p>
@@ -247,9 +254,18 @@ export const AccountLeverageCard = (properties: {
           </p>
         )}
       </Show>
-      <Switch fallback={<p class="text-sm text-slate-500 dark:text-slate-500">No subscription plan.</p>}>
+      <Switch
+        fallback={(
+          <p class="text-sm text-slate-600 dark:text-slate-400">
+            {properties.successor === undefined ? "No subscription plan." : "Its plan shows on the new sign-in."}
+          </p>
+        )}
+      >
         <Match when={properties.entry.active}>
           {active => <PlanSummary history={active()} nowMs={properties.nowMs} />}
+        </Match>
+        <Match when={properties.predecessor === undefined ? undefined : shownHistory(properties.entry)}>
+          {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
         </Match>
         <Match when={properties.entry.account.credentials.length > 0 ? shownHistory(properties.entry) : undefined}>
           {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
@@ -290,7 +306,15 @@ export const AccountLeverageCard = (properties: {
           {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
         </Match>
       </Switch>
-      <Show when={properties.entry.account.credentials.length > 0
+      <Show when={properties.predecessor}>
+        {previous => (
+          <p class="text-xs text-slate-600 dark:text-slate-400">
+            {`The plan also counts ${previous().account.event_count} ${previous().account.event_count === 1 ? "request" : "requests"} of the previous sign-in.`}
+          </p>
+        )}
+      </Show>
+      <Show when={properties.predecessor === undefined
+        && properties.entry.account.credentials.length > 0
         && properties.entry.histories.length > 0
         && properties.entry.active === undefined
         && !isRetired(properties.entry.account)

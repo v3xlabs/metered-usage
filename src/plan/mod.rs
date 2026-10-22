@@ -11,7 +11,7 @@ use jiff::Timestamp;
 use sqlx::{AssertSqlSafe, FromRow, SqliteConnection};
 
 use crate::account::{Account, AccountSummary};
-use crate::change::{Change, Subject};
+use crate::change::Subject;
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
@@ -34,15 +34,27 @@ pub struct Plan {
     #[sqlx(try_from = "StoredTimestamp")]
     pub period_start: Timestamp,
     pub period_end: Option<StoredTimestamp>,
+    /// The credential that replaced the plan's account, when nothing else could have. The
+    /// plan stays on its account until an explicit merge; the replacement's requests count
+    /// towards its leverage meanwhile.
+    #[sqlx(skip)]
+    pub replaced_by_account_id: Option<Id<Account>>,
 }
 
 impl Plan {
     pub async fn list(database: &Database) -> Result<Vec<Self>, DatabaseError> {
-        Ok(sqlx::query_as::<_, Self>(AssertSqlSafe(format!(
+        let mut transaction = database.pool.begin().await?;
+        let mut plans = sqlx::query_as::<_, Self>(AssertSqlSafe(format!(
             "{SELECT} ORDER BY plan.period_start, plan.plan_id"
         )))
-        .fetch_all(&database.pool)
-        .await?)
+        .fetch_all(&mut *transaction)
+        .await?;
+        let replacements = Account::replacements(&mut transaction).await?;
+        transaction.commit().await?;
+        for plan in &mut plans {
+            plan.replaced_by_account_id = replacements.get(&plan.account.id).copied();
+        }
+        Ok(plans)
     }
 
     pub async fn load(database: &Database, id: Id<Plan>) -> Result<Option<Self>, DatabaseError> {
@@ -54,6 +66,7 @@ impl Plan {
         plan.check()?;
         let id = database.ids.next::<Self>();
         let mut write = database.write().await?;
+        let linked = Account::replacements(&mut write).await?;
         let inserted = sqlx::query(
             "INSERT INTO plan (plan_id, account_id, name, monthly_usd, period_start, period_end) \
              SELECT ?, account_id, ?, ?, ?, ? FROM account WHERE account_id = ?",
@@ -73,7 +86,7 @@ impl Plan {
         let created = Self::read(&mut write, id)
             .await?
             .ok_or(PlanError::UnknownAccount)?;
-        Change::record(&mut write, &Subject::Plan(id)).await?;
+        Account::record_link_changes(&mut write, &linked, [Subject::Plan(id)]).await?;
         write.commit().await?;
 
         Ok(created)
@@ -104,6 +117,7 @@ impl Plan {
                 .unwrap_or_else(|| current.period_end.map(Timestamp::from)),
         };
         plan.check()?;
+        let linked = Account::replacements(&mut write).await?;
         let updated = sqlx::query(
             "UPDATE plan SET account_id = account.account_id, name = ?, monthly_usd = ?, \
              period_start = ?, period_end = ? \
@@ -122,7 +136,7 @@ impl Plan {
             return Err(PlanError::UnknownAccount);
         }
         let edited = Self::read(&mut write, id).await?;
-        Change::record(&mut write, &Subject::Plan(id)).await?;
+        Account::record_link_changes(&mut write, &linked, [Subject::Plan(id)]).await?;
         write.commit().await?;
 
         Ok(edited)
@@ -131,6 +145,7 @@ impl Plan {
     /// Answers whether there was a plan to delete.
     pub async fn delete(database: &Database, id: Id<Plan>) -> Result<bool, DatabaseError> {
         let mut write = database.write().await?;
+        let linked = Account::replacements(&mut write).await?;
         let deleted = sqlx::query("DELETE FROM plan WHERE plan_id = ?")
             .bind(id)
             .execute(&mut *write)
@@ -138,7 +153,7 @@ impl Plan {
         if deleted.rows_affected() == 0 {
             return Ok(false);
         }
-        Change::record(&mut write, &Subject::Plan(id)).await?;
+        Account::record_link_changes(&mut write, &linked, [Subject::Plan(id)]).await?;
         write.commit().await?;
 
         Ok(true)
@@ -148,12 +163,16 @@ impl Plan {
         connection: &mut SqliteConnection,
         id: Id<Plan>,
     ) -> Result<Option<Self>, DatabaseError> {
-        Ok(
+        let mut plan =
             sqlx::query_as::<_, Self>(AssertSqlSafe(format!("{SELECT} WHERE plan.plan_id = ?")))
                 .bind(id)
-                .fetch_optional(connection)
-                .await?,
-        )
+                .fetch_optional(&mut *connection)
+                .await?;
+        if let Some(plan) = plan.as_mut() {
+            let replacements = Account::replacements(connection).await?;
+            plan.replaced_by_account_id = replacements.get(&plan.account.id).copied();
+        }
+        Ok(plan)
     }
 }
 

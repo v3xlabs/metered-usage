@@ -1,10 +1,10 @@
 import { Portal } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createUniqueId, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, Show } from "solid-js";
 
 import { dismissPlanContinuation, mergeAccount } from "../../api/accounts";
 import { accountLabel, signInDescription } from "../../domain/account";
 import { formatUsd, formatUtcDay } from "../../domain/format";
-import { isEnded, shownHistory } from "../../domain/leverage";
+import { continuedPlan, continuedPlans, isEnded, isLinked } from "../../domain/leverage";
 import { BUTTON } from "../Control";
 import type { PlanDecision } from "./PlanContinuationNotice";
 
@@ -19,11 +19,21 @@ export const PlanContinuationDialog = (properties: {
   const descriptionId = createUniqueId();
   const [isSaving, setIsSaving] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
-  const plan = createMemo(() => (properties.decision === undefined ? undefined : shownHistory(properties.decision.continuation.previous)?.plan));
+  const plan = createMemo(() => (properties.decision === undefined
+    ? undefined
+    : continuedPlan(properties.decision.continuation.previous, properties.decision.continuation.replacement)));
+  const plans = createMemo(() => (properties.decision === undefined
+    ? []
+    : continuedPlans(properties.decision.continuation.previous, properties.decision.continuation.replacement)));
   const hasEnded = createMemo(() => {
     const kept = plan();
 
     return kept !== undefined && isEnded(kept, properties.nowMs);
+  });
+  const isCombining = createMemo(() => {
+    const pair = properties.decision?.continuation;
+
+    return hasEnded() || (pair !== undefined && isLinked(pair.previous, pair.replacement));
   });
   const endedOn = createMemo(() => {
     const end = plan()?.period_end;
@@ -37,14 +47,14 @@ export const PlanContinuationDialog = (properties: {
   const title = createMemo(() => {
     if (properties.decision?.action === "dismiss") return "Keep these plans separate?";
 
-    return hasEnded() ? "Combine request history?" : "Continue this plan?";
+    return isCombining() ? "Combine request history?" : "Continue this plan?";
   });
   const actionLabel = createMemo(() => {
     if (isSaving()) return "Saving...";
 
     if (properties.decision?.action === "dismiss") return "Keep separate";
 
-    return hasEnded() ? "Combine request history" : "Continue plan";
+    return isCombining() ? "Combine request history" : "Continue plan";
   });
 
   createEffect(
@@ -126,17 +136,27 @@ export const PlanContinuationDialog = (properties: {
                     <dd>{signInDescription(decision().continuation.replacement.account)}</dd>
                   </div>
                 </dl>
-                <Show when={decision().action === "merge"} fallback={<p>The plans will stay separate. This suggestion will not return for these two sign-ins.</p>}>
+                <Show
+                  when={decision().action === "merge"}
+                  fallback={(
+                    <p>
+                      {isLinked(decision().continuation.previous, decision().continuation.replacement)
+                        ? "The plan will move back to the previous sign-in. This suggestion will not return for these two sign-ins."
+                        : "The plans will stay separate. This suggestion will not return for these two sign-ins."}
+                    </p>
+                  )}
+                >
                   <p>{`Move ${decision().continuation.previous.account.event_count} requests to the new sign-in and combine their history? This cannot be undone.`}</p>
-                  <Show when={plan()}>
-                    {kept => (
-                      <p class="text-xs text-slate-600 dark:text-slate-400">
-                        {`Keep ${kept().name} at ${formatUsd(kept().monthly_usd)} / month from ${formatUtcDay(kept().period_start)} and its billing periods.`}
-                        <Show when={hasEnded()}>
-                          <span class="block font-medium text-amber-700 dark:text-amber-400">{`The plan ended ${endedOn()} and will stay ended. Requests after that date stay outside its billing periods.`}</span>
-                        </Show>
-                      </p>
-                    )}
+                  <Show when={isLinked(decision().continuation.previous, decision().continuation.replacement)}>
+                    <p>The plan already shows on the new sign-in. The previous sign-in will be listed under Credentials.</p>
+                  </Show>
+                  <ul class="space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                    <For each={plans()}>
+                      {kept => <li>{`Keep ${kept.name} at ${formatUsd(kept.monthly_usd)} / month from ${formatUtcDay(kept.period_start)} and its billing periods.`}</li>}
+                    </For>
+                  </ul>
+                  <Show when={hasEnded()}>
+                    <p class="text-xs font-medium text-amber-700 dark:text-amber-400">{`The plan ended ${endedOn()} and will stay ended. Requests after that date stay outside its billing periods.`}</p>
                   </Show>
                 </Show>
               </div>
@@ -145,6 +165,7 @@ export const PlanContinuationDialog = (properties: {
               </Show>
               <div class="flex flex-wrap justify-end gap-2">
                 <button
+                  autofocus={decision().action === "merge"}
                   type="button"
                   aria-disabled={isSaving() ? "true" : "false"}
                   onClick={close}
@@ -153,7 +174,7 @@ export const PlanContinuationDialog = (properties: {
                   Cancel
                 </button>
                 <button
-                  autofocus
+                  autofocus={decision().action === "dismiss"}
                   type="button"
                   aria-disabled={isSaving() ? "true" : "false"}
                   onClick={() => void save()}

@@ -23,7 +23,6 @@ use crate::change::{Change, Subject};
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
-use crate::plan::Plan;
 use crate::source::Source;
 
 /// Shorter than this, the last four characters of a secret are most of it.
@@ -54,6 +53,11 @@ pub struct Account {
     /// Advisory replacements of this removed credential. Email is never an identity.
     #[sqlx(skip)]
     pub plan_continuation_account_ids: Vec<Id<Account>>,
+    /// The one credential that replaced this removed one, when nothing else could have. See
+    /// [`Account::replacements`]. Never an identity: its history stays on this account until
+    /// an explicit merge.
+    #[sqlx(skip)]
+    pub replaced_by_account_id: Option<Id<Account>>,
 }
 
 impl Account {
@@ -218,17 +222,12 @@ impl Account {
         if moved.rows_affected() > 0 {
             Change::record(&mut transaction, &Subject::Usage).await?;
         }
-        let plans = sqlx::query_scalar::<_, Id<Plan>>(
-            "UPDATE plan SET account_id = ? WHERE account_id = ? RETURNING plan_id",
-        )
-        .bind(into)
-        .bind(id)
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(DatabaseError::from)?;
-        for plan_id in plans {
-            Change::record(&mut transaction, &Subject::Plan(plan_id)).await?;
-        }
+        sqlx::query("UPDATE plan SET account_id = ? WHERE account_id = ?")
+            .bind(into)
+            .bind(id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(DatabaseError::from)?;
         sqlx::query(
             "UPDATE account SET merged_into_account_id = ? \
              WHERE account_id = ? OR merged_into_account_id = ?",

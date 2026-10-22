@@ -10,6 +10,7 @@ use sqlx::SqliteConnection;
 use crate::change::{Change, Subject};
 use crate::database::Write;
 use crate::database::codec::StoredTimestamp;
+use crate::plan::Plan;
 use crate::prelude::*;
 
 /// Everything the account and quota lists show of an account other than its traffic. A
@@ -32,6 +33,13 @@ const ACCOUNTS: &str = "SELECT account.account_id, json_array(source.name, accou
          WHERE previous.merged_into_account_id = account.account_id)) \
      FROM account JOIN source ON source.source_id = account.source_id \
      LEFT JOIN credential_state ON credential_state.account_id = account.account_id \
+     WHERE (?1 IS NULL OR account.source_id = ?1) AND (?2 IS NULL OR account.account_id = ?2 \
+         OR account.account_id = (SELECT merged_into_account_id FROM account WHERE account_id = ?2))";
+
+/// The account each plan is on and the credential that replaced it, so a plan moved by a
+/// merge or reached by a new replacement is recorded as the plan lists show it.
+const PLANS: &str = "SELECT plan.plan_id, plan.account_id FROM plan \
+     JOIN account ON account.account_id = plan.account_id \
      WHERE (?1 IS NULL OR account.source_id = ?1) AND (?2 IS NULL OR account.account_id = ?2 \
          OR account.account_id = (SELECT merged_into_account_id FROM account WHERE account_id = ?2))";
 
@@ -146,20 +154,60 @@ impl Snapshot {
         parts: Parts,
         now: Timestamp,
     ) -> Result<Self, DatabaseError> {
+        // A write to one account can move a link of another, since a replacement's plan type
+        // is part of what links it to the credential it replaced. So an account's scope reads
+        // its whole source, which no write of one account changes beyond that account's own
+        // subjects and the links.
+        let (source, account) = match scope {
+            Scope::Account(account_id) => {
+                match sqlx::query_scalar::<_, Id<Source>>(
+                    "SELECT source_id FROM account WHERE account_id = ?",
+                )
+                .bind(account_id)
+                .fetch_optional(&mut *connection)
+                .await?
+                {
+                    Some(source_id) => (Some(source_id), None),
+                    None => (None, Some(account_id)),
+                }
+            }
+            Scope::All | Scope::Source(_) => (scope.source(), scope.account()),
+        };
         let mut seen = BTreeMap::new();
-        for (account_id, account) in sqlx::query_as::<_, (Id<Account>, String)>(ACCOUNTS)
-            .bind(scope.source())
-            .bind(scope.account())
+        let replacements = Account::replacements(&mut *connection).await?;
+        for (account_id, state) in sqlx::query_as::<_, (Id<Account>, String)>(ACCOUNTS)
+            .bind(source)
+            .bind(account)
             .fetch_all(&mut *connection)
             .await?
         {
-            seen.insert(Subject::Account(account_id), account);
+            let replaced_by = replacements.get(&account_id).map(|id| id.encode());
+            seen.insert(
+                Subject::Account(account_id),
+                format!("{state}{}", replaced_by.unwrap_or_default()),
+            );
+        }
+        for (plan_id, account_id) in sqlx::query_as::<_, (Id<Plan>, Id<Account>)>(PLANS)
+            .bind(source)
+            .bind(account)
+            .fetch_all(&mut *connection)
+            .await?
+        {
+            let replaced_by = replacements.get(&account_id).map(|id| id.encode());
+            seen.insert(
+                Subject::Plan(plan_id),
+                format!(
+                    "{}>{}",
+                    account_id.encode(),
+                    replaced_by.unwrap_or_default()
+                ),
+            );
         }
         if parts == Parts::Quota {
             for (account_id, window_key, window) in
                 sqlx::query_as::<_, (Id<Account>, String, String)>(WINDOWS)
-                    .bind(scope.source())
-                    .bind(scope.account())
+                    .bind(source)
+                    .bind(account)
                     .fetch_all(&mut *connection)
                     .await?
             {
@@ -172,8 +220,8 @@ impl Snapshot {
                 );
             }
             for (account_id, resets) in sqlx::query_as::<_, (Id<Account>, String)>(RESETS)
-                .bind(scope.source())
-                .bind(scope.account())
+                .bind(source)
+                .bind(account)
                 .bind(StoredTimestamp::from(now))
                 .fetch_all(&mut *connection)
                 .await?

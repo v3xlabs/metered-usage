@@ -612,8 +612,10 @@ export interface paths {
          *     `timeout` seconds, default 30 and at most 50, and answers when a change commits.
          * @description `quota.updated` names an account and window whose reported values changed;
          *     `reset.updated` an account whose manual resets changed; `account.changed` an
-         *     account whose names, CLIProxy state or last hard refresh changed; `price.changed`
-         *     a model whose latest price changed; `plan.changed` a plan added, edited or removed.
+         *     account whose names, CLIProxy state, last hard refresh or `replaced_by_account_id`
+         *     changed; `price.changed` a model whose latest price changed; `plan.changed` a plan
+         *     added, edited, removed, moved to another account or whose account's
+         *     `replaced_by_account_id` changed.
          *     `usage.updated` has no subject fields. It is coalesced to one event per accepted
          *     ingest batch, nonempty price fill, reprice transaction or account merge moving usage.
          *     Read the usage summary and leverage again. Duplicates and rejected records alone
@@ -721,6 +723,14 @@ export interface components {
             credentials: components["schemas"]["Credential"][];
             /** @description Advisory replacements of this removed credential, excluding dismissed pairs. */
             plan_continuation_account_ids: string[];
+            /**
+             * @description The one credential that replaced this removed one. Present only while no other
+             *     credential of the same source, provider, sign-in kind and label could have, the
+             *     pair is not dismissed and the replacement has no plan of its own. Derived on every
+             *     read, so it appears and goes with `account.changed`. Fold the plan history onto
+             *     the successor; the history stays on this account until a merge.
+             */
+            replaced_by_account_id?: string;
         };
         /** AccountHealth */
         AccountHealth: {
@@ -1044,6 +1054,12 @@ export interface components {
             monthly_usd: number;
             period_start: string;
             period_end?: string;
+            /**
+             * @description The credential that replaced the plan's account, same rule and meaning as on an
+             *     account of `/accounts`. The plan stays on `account`; its leverage counts the
+             *     replacement's requests too. Absent when nothing is known to have replaced it.
+             */
+            replaced_by_account_id?: string;
         };
         /**
          * PlanInput
