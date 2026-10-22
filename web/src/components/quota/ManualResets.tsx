@@ -61,7 +61,7 @@ export const ManualResets = (properties: {
   });
 
   createEffect(() => step().kind, (kind) => {
-    if (kind === "confirm") cancel?.focus();
+    if (kind === "confirm" || kind === "failed") cancel?.focus();
   });
 
   const changeOpen = (isNowOpen: boolean): void => {

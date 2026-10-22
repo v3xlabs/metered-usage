@@ -323,7 +323,7 @@ export const QuotaCard = (properties: {
           <HealthStrip accountId={properties.entry.account.account_id} strip={properties.health} shape="pills" />
           <AuthKindIcon authKind={properties.entry.account.auth_kind} />
           <Show when={properties.entry.hard_refreshable}>
-            <span class="-my-1 flex">
+            <span data-provider-refresh class="-my-1 flex">
               <IconButton
                 label={`Refresh ${accountLabel(properties.entry.account)} from the provider`}
                 tooltip={isRefreshing() ? "Refreshing from the provider" : "Refresh from the provider"}
@@ -355,7 +355,7 @@ export const QuotaCard = (properties: {
             onPending={setIsResetting}
             onAccounts={properties.onAccounts}
             onReset={properties.onReset}
-            onFocusFallback={() => card?.focus()}
+            onFocusFallback={() => (card?.querySelector<HTMLButtonElement>(":scope [data-provider-refresh] button:not(:disabled)") ?? card)?.focus()}
           />
           <Show when={properties.entry.disabled}>
             <StatusMark tone="danger" text="Disabled" />
