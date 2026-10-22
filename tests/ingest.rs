@@ -839,7 +839,7 @@ async fn the_read_token_reads_and_never_writes() {
 }
 
 #[tokio::test]
-async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
+async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_account_health() {
     let gateway = gateway().await.expect("a gateway");
     let bearer = format!("Bearer {CONSUMER_TOKEN}");
 
@@ -851,6 +851,7 @@ async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
         "/api/usage/summary?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z&step=day",
         "/api/plans",
         "/api/leverage",
+        "/api/analytics/health",
     ] {
         let response = gateway
             .anonymous
@@ -864,6 +865,11 @@ async fn the_consumer_token_reads_only_the_changes_and_the_lists_they_name() {
         "/api/usage/events",
         "/api/usage/stream",
         "/api/analytics/summary",
+        "/api/analytics/series",
+        "/api/analytics/breakdown",
+        "/api/analytics/sessions",
+        "/api/analytics/requests",
+        "/api/analytics/dimensions",
         "/api/sources",
         "/mcp",
     ] {
