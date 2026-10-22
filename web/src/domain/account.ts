@@ -1,5 +1,6 @@
-import type { AccountSummary, AuthKind } from "../api/accounts";
+import type { Account, AccountSummary, AuthKind } from "../api/accounts";
 import { providerLabel } from "../components/ProviderIcon";
+import { formatMoment } from "./format";
 import { redact } from "./privacy";
 
 export const AUTH_KIND_LABELS: Record<AuthKind, string> = {
@@ -22,6 +23,9 @@ export const accountText = (account: AccountSummary, isSourceShown: boolean): st
 
 export const accountDescription = (account: AccountSummary): string =>
   `${accountLabel(account)}, ${providerLabel(account.provider)} on ${redact(account.source_name)}, ${AUTH_KIND_LABELS[account.auth_kind]}`;
+
+export const signInDescription = (account: Account): string =>
+  `First seen ${formatMoment(account.first_seen_at)}, ${account.event_count} ${account.event_count === 1 ? "request" : "requests"}${account.last_used_at === undefined ? "" : `, last request ${formatMoment(account.last_used_at)}`}`;
 
 // The names CLIProxy's management UI shows for the plan types in a Codex ID token.
 const CODEX_PLAN_LABELS: Readonly<Record<string, string>> = {

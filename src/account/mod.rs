@@ -3,6 +3,11 @@
 //! An account is not a person. Two subscriptions logged in with one email are two
 //! accounts, and one email seen through two sources is two accounts.
 
+mod continuation;
+mod read;
+
+pub use read::Credential;
+
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -11,10 +16,7 @@ use jiff::Timestamp;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
 use sqlx::sqlite::{SqliteTypeInfo, SqliteValueRef};
-use sqlx::{
-    AssertSqlSafe, Database as SqlxDatabase, Decode, Encode, FromRow, Sqlite, SqliteConnection,
-    Type,
-};
+use sqlx::{Database as SqlxDatabase, Decode, Encode, FromRow, Sqlite, SqliteConnection, Type};
 
 use crate::change::snapshot::{Scope, Snapshot};
 use crate::change::{Change, Subject};
@@ -23,19 +25,6 @@ use crate::database::{Database, DatabaseError};
 use crate::id::Id;
 use crate::plan::Plan;
 use crate::source::Source;
-
-/// `event_count` counts the events charged to the row itself, so a merged account, whose
-/// events moved to the account that absorbed it, reads zero.
-const SELECT: &str = "SELECT account.account_id, account.source_id, source.name AS source_name, \
-     account.provider, account.auth_kind, account.label, account.display_name, \
-     account.merged_into_account_id, credential_state.account_type, credential_state.plan, \
-     credential_state.status, COALESCE(credential_state.disabled, 0) AS disabled, \
-     credential_state.removed_at, account.first_seen_at, account.last_seen_at, \
-     (SELECT MAX(occurred_at) FROM usage_event \
-         WHERE usage_event.account_id = account.account_id) AS last_used_at, \
-     (SELECT COUNT(*) FROM usage_event WHERE usage_event.account_id = account.account_id) AS event_count \
-     FROM account JOIN source ON source.source_id = account.source_id \
-     LEFT JOIN credential_state ON credential_state.account_id = account.account_id";
 
 /// Shorter than this, the last four characters of a secret are most of it.
 const MASKABLE_LENGTH: usize = 8;
@@ -59,28 +48,15 @@ pub struct Account {
     #[sqlx(try_from = "StoredTimestamp")]
     pub last_seen_at: Timestamp,
     pub event_count: i64,
+    /// Previous credentials explicitly merged into this account, never separate cards.
+    #[sqlx(skip)]
+    pub credentials: Vec<Credential>,
+    /// Advisory replacements of this removed credential. Email is never an identity.
+    #[sqlx(skip)]
+    pub plan_continuation_account_ids: Vec<Id<Account>>,
 }
 
 impl Account {
-    /// Leaves out every account merged into another.
-    pub async fn list(database: &Database) -> Result<Vec<Self>, DatabaseError> {
-        Ok(sqlx::query_as::<_, Self>(AssertSqlSafe(format!(
-            "{SELECT} WHERE account.merged_into_account_id IS NULL \
-             ORDER BY account.last_seen_at DESC, account.account_id"
-        )))
-        .fetch_all(&database.pool)
-        .await?)
-    }
-
-    pub async fn load(database: &Database, id: Id<Account>) -> Result<Option<Self>, DatabaseError> {
-        Ok(sqlx::query_as::<_, Self>(AssertSqlSafe(format!(
-            "{SELECT} WHERE account.account_id = ?"
-        )))
-        .bind(id)
-        .fetch_optional(&database.pool)
-        .await?)
-    }
-
     /// Answers the account as it now reads, or nothing when there is no such account.
     pub async fn rename(
         database: &Database,
@@ -190,10 +166,12 @@ impl Account {
 
     /// Moves every event and plan of `id` onto `into` and points `id`, and every account
     /// already merged into it, at `into`, so resolution never follows more than one step.
+    /// A suggested continuation rechecks the pair under the same write lock as the merge.
     pub async fn merge(
         database: &Database,
         id: Id<Account>,
         into: Id<Account>,
+        requires_continuation: bool,
     ) -> Result<Self, MergeError> {
         if id == into {
             return Err(MergeError::Same);
@@ -216,8 +194,18 @@ impl Account {
         if merged.source_id != target.source_id {
             return Err(MergeError::DifferentSources);
         }
+        if merged.merged_into_account_id.is_some() {
+            return Err(MergeError::SourceMerged);
+        }
         if target.merged_into_account_id.is_some() {
             return Err(MergeError::TargetMerged);
+        }
+        if requires_continuation
+            && continuation::Continuation::load(&mut transaction, id, into)
+                .await?
+                .is_none()
+        {
+            return Err(MergeError::ContinuationChanged);
         }
         let snapshot =
             Snapshot::accounts(&mut transaction, Scope::Source(merged.source_id)).await?;
@@ -275,8 +263,12 @@ pub enum MergeError {
     Same,
     #[error("accounts of two sources cannot be merged")]
     DifferentSources,
+    #[error("This sign-in was already combined.")]
+    SourceMerged,
     #[error("the target account is itself merged into another")]
     TargetMerged,
+    #[error("The suggested sign-in changed. The plans have not been combined.")]
+    ContinuationChanged,
     #[error("account was not found")]
     Missing,
     #[error(transparent)]

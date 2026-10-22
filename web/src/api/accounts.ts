@@ -41,11 +41,11 @@ export const setDisplayName = async (accountId: string, displayName: string): Pr
   throw new Error(`Account update failed with status ${response.status}.`);
 };
 
-export const mergeAccount = async (accountId: string, intoAccountId: string): Promise<Result<Account>> => {
+export const mergeAccount = async (accountId: string, intoAccountId: string, requiresContinuation = false): Promise<Result<Account>> => {
   const response = await api("/accounts/{account_id}/merge", "post", {
     path: { account_id: accountId },
     contentType: "application/json; charset=utf-8",
-    data: { into_account_id: intoAccountId },
+    data: { into_account_id: intoAccountId, require_plan_continuation: requiresContinuation },
   });
 
   if (response.status === 200) return { ok: true, value: response.data };
@@ -53,4 +53,18 @@ export const mergeAccount = async (accountId: string, intoAccountId: string): Pr
   if (response.status === 400 || response.status === 404) return { ok: false, message: response.data.message };
 
   throw new Error(`Account merge failed with status ${response.status}.`);
+};
+
+export const dismissPlanContinuation = async (accountId: string, otherAccountId: string): Promise<Result<undefined>> => {
+  const response = await api("/accounts/{account_id}/different-plan", "post", {
+    path: { account_id: accountId },
+    contentType: "application/json; charset=utf-8",
+    data: { other_account_id: otherAccountId },
+  });
+
+  if (response.status === 204) return { ok: true, value: undefined };
+
+  if (response.status === 404) return { ok: false, message: response.data.message };
+
+  throw new Error(`Plan continuation dismissal failed with status ${response.status}.`);
 };

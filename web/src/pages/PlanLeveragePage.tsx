@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Errored, For, Loading, refresh, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, Loading, refresh, Show } from "solid-js";
 
 import { listAccounts } from "../api/accounts";
 import { fetchLeverage } from "../api/leverage";
@@ -6,6 +6,8 @@ import { listPlans } from "../api/plans";
 import { fetchQuota } from "../api/quota";
 import { AccountLeverageCard } from "../components/leverage/AccountLeverageCard";
 import { LeverageHistory } from "../components/leverage/LeverageHistory";
+import { PlanContinuationDialog } from "../components/leverage/PlanContinuationDialog";
+import type { PlanContinuation, PlanDecision } from "../components/leverage/PlanContinuationNotice";
 import { RegionFailure, RegionPending } from "../components/Region";
 import { accountsNeedingSource, isRetired } from "../domain/account";
 import type { AccountLeverage } from "../domain/leverage";
@@ -25,6 +27,17 @@ export const PlanLeveragePage = () => {
   });
   const nowMs = Date.now();
   const [selectedAccountId, setSelectedAccountId] = createSignal<string | undefined>();
+  const [decision, setDecision] = createSignal<PlanDecision | undefined>();
+  const [notice, setNotice] = createSignal<string | undefined>();
+  let status: HTMLParagraphElement | undefined;
+
+  createEffect(() => notice(), (message) => {
+    if (message === undefined) return;
+
+    const frame = requestAnimationFrame(() => status?.focus());
+
+    return () => cancelAnimationFrame(frame);
+  });
 
   const periodsByPlan = createMemo(() => new Map(leverage().map(entry => [entry.plan.plan_id, entry.periods])));
 
@@ -40,6 +53,13 @@ export const PlanLeveragePage = () => {
       })
       .toSorted(byStanding));
 
+  const continuations = createMemo((): readonly PlanContinuation[] => entries().flatMap(previous =>
+    previous.account.plan_continuation_account_ids.flatMap((accountId) => {
+      const replacement = entries().find(entry => entry.account.account_id === accountId);
+
+      return replacement === undefined ? [] : [{ previous, replacement }];
+    })));
+
   const needingSource = createMemo(() => accountsNeedingSource(entries().map(entry => entry.account)));
   const scaleMax = createMemo(() => {
     const peak = Math.max(0, ...entries().flatMap(entry => entry.histories.flatMap(history => history.periods.map(period => period.leverage ?? 0))));
@@ -54,26 +74,53 @@ export const PlanLeveragePage = () => {
   const folded = createMemo(() => entries().filter(entry => isRetired(entry.account) && entry.histories.length === 0));
   const shown = createMemo(() => entries().filter(entry => !folded().includes(entry)));
 
-  const reload = (): void => {
-    refresh(plans);
-    refresh(leverage);
+  const reload = async (): Promise<void> => {
+    await Promise.all([refresh(accounts), refresh(plans), refresh(leverage)]);
+  };
+
+  const decisionSaved = async (saved: PlanDecision, isStale: boolean): Promise<void> => {
+    await reload();
+    setDecision(undefined);
+    setSelectedAccountId(saved.continuation.replacement.account.account_id);
+
+    if (isStale) setNotice("The sign-ins changed. The plans below are up to date.");
+    else setNotice(saved.action === "merge" ? "Sign-in history combined." : "Suggestion dismissed. The plans stay separate.");
+  };
+
+  const decide = (next: PlanDecision): void => {
+    setNotice(undefined);
+    setDecision(next);
   };
 
   const card = (entry: AccountLeverage) => (
     <AccountLeverageCard
       entry={entry}
+      continuations={continuations().filter(pair => pair.previous === entry || pair.replacement === entry)}
       isSourceShown={needingSource().has(entry.account.account_id)}
       isSelected={selected()?.account.account_id === entry.account.account_id}
       nowMs={nowMs}
       windows={windowsByAccount().get(entry.account.account_id)}
       onSelect={() => setSelectedAccountId(entry.account.account_id)}
       onChanged={reload}
+      onDecide={decide}
     />
   );
 
   return (
     <div class="space-y-8">
       <h1 class="sr-only">Plan leverage</h1>
+      <Show when={notice()}>
+        {message => (
+          <p
+            ref={(element) => { status = element; }}
+            role="status"
+            tabindex="-1"
+            class="rounded-panel bg-surface px-4 py-3 text-sm outline-none"
+          >
+            {message()}
+          </p>
+        )}
+      </Show>
       <Errored fallback={(error, reset) => <RegionFailure error={error()} retry={reset} />}>
         <Loading fallback={<RegionPending label="Loading plans" heightPx={408} isOnCanvas />}>
           <Show
@@ -112,6 +159,12 @@ export const PlanLeveragePage = () => {
           </Show>
         </Loading>
       </Errored>
+      <PlanContinuationDialog
+        decision={decision()}
+        nowMs={nowMs}
+        onClose={() => setDecision(undefined)}
+        onSaved={decisionSaved}
+      />
     </div>
   );
 };

@@ -95,7 +95,7 @@ export const reportedPlanChange = (entry: AccountLeverage): string | undefined =
   return running.includes(named) ? undefined : label;
 };
 
-export type PlanEndSuggestion = { planId: string; periodEnd: string; lastRequestAt: string | undefined; isRemoved: boolean; };
+export type PlanEndSuggestion = { planId: string; periodEnd: string; lastRequestAt: string | undefined; };
 
 // A plan still open on a credential CLIProxy stopped listing ended with its last request, or
 // on the day CLIProxy stopped listing a credential that carried none. A credential merely
@@ -114,6 +114,6 @@ export const suggestedPlanEnd = (entry: AccountLeverage): PlanEndSuggestion | un
   const endMs = (Math.floor(Date.parse(lastMoment) / MS_PER_DAY) + 1) * MS_PER_DAY;
 
   return endMs > Date.parse(plan.period_start)
-    ? { planId: plan.plan_id, periodEnd: new Date(endMs).toISOString(), lastRequestAt: entry.account.last_used_at, isRemoved: entry.account.removed_at !== undefined }
+    ? { planId: plan.plan_id, periodEnd: new Date(endMs).toISOString(), lastRequestAt: entry.account.last_used_at }
     : undefined;
 };

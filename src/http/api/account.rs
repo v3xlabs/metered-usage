@@ -4,7 +4,7 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 
-use crate::account::MergeError;
+use crate::account::{Credential, MergeError};
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::conditional::conditional;
@@ -20,6 +20,9 @@ impl AccountApi {
     /// with no body while those bytes are the same. Usage moves `last_seen_at`,
     /// `last_used_at` and `event_count`, so the tag changes often; follow `/events` to learn
     /// when to read again.
+    /// `plan_continuation_account_ids` suggests replacements for a removed credential,
+    /// never an identity. Read again after `account.changed` or `plan.changed`. `credentials`
+    /// lists previous sign-ins explicitly merged into the account.
     #[oai(
         path = "/accounts",
         method = "get",
@@ -74,6 +77,7 @@ impl AccountApi {
 
     /// Folds an account into another of the same source: its events move to the target,
     /// and any record that later names its credential is charged to the target.
+    /// With `require_plan_continuation`, rechecks the suggested pair before moving history.
     #[oai(
         path = "/accounts/:account_id/merge",
         method = "post",
@@ -90,17 +94,54 @@ impl AccountApi {
         ) else {
             return MergeResponse::Missing(Json(missing()));
         };
-        match Account::merge(&self.state.database, account_id, into).await {
+        match Account::merge(
+            &self.state.database,
+            account_id,
+            into,
+            input.0.require_plan_continuation.unwrap_or(false),
+        )
+        .await
+        {
             Ok(account) => MergeResponse::Merged(Json(Box::new(account.into()))),
             Err(MergeError::Missing) => MergeResponse::Missing(Json(missing())),
             Err(
-                error
-                @ (MergeError::Same | MergeError::DifferentSources | MergeError::TargetMerged),
+                error @ (MergeError::Same
+                | MergeError::DifferentSources
+                | MergeError::SourceMerged
+                | MergeError::TargetMerged
+                | MergeError::ContinuationChanged),
             ) => MergeResponse::Invalid(Json(Error {
                 message: error.to_string(),
             })),
             Err(MergeError::Database(error)) => {
                 MergeResponse::Failed(Json(failure("merge_account", &error)))
+            }
+        }
+    }
+
+    /// Remembers that two credentials belong to different plans. Repeating the decision
+    /// records no change. The pair remains dismissed when either credential reappears.
+    #[oai(
+        path = "/accounts/:account_id/different-plan",
+        method = "post",
+        operation_id = "dismiss_plan_continuation"
+    )]
+    async fn dismiss_plan_continuation(
+        &self,
+        account_id: Path<String>,
+        input: Json<ContinuationDismissInput>,
+    ) -> DismissResponse {
+        let (Ok(account_id), Ok(other)) = (
+            account_id.0.parse::<Id<Account>>(),
+            input.0.other_account_id.parse::<Id<Account>>(),
+        ) else {
+            return DismissResponse::Missing(Json(missing()));
+        };
+        match Account::dismiss_continuation(&self.state.database, account_id, other).await {
+            Ok(true) => DismissResponse::Dismissed,
+            Ok(false) => DismissResponse::Missing(Json(missing())),
+            Err(error) => {
+                DismissResponse::Failed(Json(failure("dismiss_plan_continuation", &error)))
             }
         }
     }
@@ -159,6 +200,10 @@ struct AccountOutput {
     first_seen_at: String,
     last_seen_at: String,
     event_count: i64,
+    /// Previous sign-ins explicitly merged into this account.
+    credentials: Vec<CredentialOutput>,
+    /// Advisory replacements of this removed credential, excluding dismissed pairs.
+    plan_continuation_account_ids: Vec<String>,
 }
 
 impl From<Account> for AccountOutput {
@@ -182,6 +227,34 @@ impl From<Account> for AccountOutput {
             first_seen_at: account.first_seen_at.to_string(),
             last_seen_at: account.last_seen_at.to_string(),
             event_count: account.event_count,
+            credentials: account
+                .credentials
+                .into_iter()
+                .map(CredentialOutput::from)
+                .collect(),
+            plan_continuation_account_ids: account
+                .plan_continuation_account_ids
+                .into_iter()
+                .map(Id::encode)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Object)]
+#[oai(rename = "Credential", skip_serializing_if_is_none)]
+struct CredentialOutput {
+    account: AccountSummaryOutput,
+    first_seen_at: String,
+    last_seen_at: String,
+}
+
+impl From<Credential> for CredentialOutput {
+    fn from(credential: Credential) -> Self {
+        Self {
+            account: credential.summary.into(),
+            first_seen_at: credential.first_seen_at.to_string(),
+            last_seen_at: credential.last_seen_at.to_string(),
         }
     }
 }
@@ -218,8 +291,25 @@ struct AccountUpdate {
 }
 
 #[derive(Debug, Object)]
+struct ContinuationDismissInput {
+    other_account_id: String,
+}
+
+#[derive(Debug, Object)]
 struct MergeInput {
     into_account_id: String,
+    /// Rejects a stale suggestion without changing either plan. Absent for manual merges.
+    require_plan_continuation: Option<bool>,
+}
+
+#[derive(ApiResponse)]
+enum DismissResponse {
+    #[oai(status = 204)]
+    Dismissed,
+    #[oai(status = 404)]
+    Missing(Json<Error>),
+    #[oai(status = 500)]
+    Failed(Json<Error>),
 }
 
 #[derive(ApiResponse)]

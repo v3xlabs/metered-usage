@@ -227,7 +227,9 @@ async fn an_account_merge_invalidates_account_grouping_and_moved_plans() {
     .await
     .unwrap();
     let cursor = Change::latest(&state.database).await.unwrap();
-    Account::merge(&state.database, from, into).await.unwrap();
+    Account::merge(&state.database, from, into, false)
+        .await
+        .unwrap();
     let answer = changes(&client, cursor, "usage.updated,plan.changed").await;
     assert_eq!(answer["events"].as_array().unwrap().len(), 2);
     assert_eq!(answer["events"][0]["kind"], "usage.updated");

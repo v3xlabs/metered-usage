@@ -103,6 +103,9 @@ export interface paths {
          *     with no body while those bytes are the same. Usage moves `last_seen_at`,
          *     `last_used_at` and `event_count`, so the tag changes often; follow `/events` to learn
          *     when to read again.
+         *     `plan_continuation_account_ids` suggests replacements for a removed credential,
+         *     never an identity. Read again after `account.changed` or `plan.changed`. `credentials`
+         *     lists previous sign-ins explicitly merged into the account.
          */
         get: operations["list_accounts"];
         put?: never;
@@ -142,8 +145,29 @@ export interface paths {
         /**
          * Folds an account into another of the same source: its events move to the target,
          *     and any record that later names its credential is charged to the target.
+         *     With `require_plan_continuation`, rechecks the suggested pair before moving history.
          */
         post: operations["merge_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/accounts/{account_id}/different-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remembers that two credentials belong to different plans. Repeating the decision
+         *     records no change. The pair remains dismissed when either credential reappears.
+         */
+        post: operations["dismiss_plan_continuation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -679,6 +703,10 @@ export interface components {
             last_seen_at: string;
             /** Format: int64 */
             event_count: number;
+            /** @description Previous sign-ins explicitly merged into this account. */
+            credentials: components["schemas"]["Credential"][];
+            /** @description Advisory replacements of this removed credential, excluding dismissed pairs. */
+            plan_continuation_account_ids: string[];
         };
         /** AccountHealth */
         AccountHealth: {
@@ -791,6 +819,10 @@ export interface components {
             last_error?: string;
             updated_at: string;
         };
+        /** ContinuationDismissInput */
+        ContinuationDismissInput: {
+            other_account_id: string;
+        };
         /**
          * Cooldown
          * @description A CLIProxy cooldown timer on the credential or on one of its models.
@@ -805,6 +837,12 @@ export interface components {
              * @description Seconds left when CLIProxy was last read.
              */
             remaining_seconds: number;
+        };
+        /** Credential */
+        Credential: {
+            account: components["schemas"]["AccountSummary"];
+            first_seen_at: string;
+            last_seen_at: string;
         };
         /**
          * DailyBurn
@@ -950,6 +988,8 @@ export interface components {
         /** MergeInput */
         MergeInput: {
             into_account_id: string;
+            /** @description Rejects a stale suggestion without changing either plan. Absent for manual merges. */
+            require_plan_continuation?: boolean;
         };
         /** ModelPrice */
         ModelPrice: {
@@ -1851,6 +1891,45 @@ export interface operations {
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["Error"];
                 };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    dismiss_plan_continuation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json; charset=utf-8": components["schemas"]["ContinuationDismissInput"];
+            };
+        };
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             404: {
                 headers: {

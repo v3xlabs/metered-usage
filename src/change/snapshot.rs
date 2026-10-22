@@ -25,10 +25,15 @@ const ACCOUNTS: &str = "SELECT account.account_id, json_array(source.name, accou
          FROM json_each(credential_state.cooldowns) AS cooldown), \
      credential_state.account_type, credential_state.plan, credential_state.hard_refreshable, \
      credential_state.hard_refreshed_at, credential_state.hard_refresh_error, \
-     credential_state.removed_at) \
+     credential_state.removed_at, \
+     (SELECT json_group_array(json_array(previous.account_id, previous.label, previous.display_name, \
+         previous.provider, previous.auth_kind, previous.first_seen_at, previous.last_seen_at) \
+         ORDER BY previous.account_id) FROM account AS previous \
+         WHERE previous.merged_into_account_id = account.account_id)) \
      FROM account JOIN source ON source.source_id = account.source_id \
      LEFT JOIN credential_state ON credential_state.account_id = account.account_id \
-     WHERE (?1 IS NULL OR account.source_id = ?1) AND (?2 IS NULL OR account.account_id = ?2)";
+     WHERE (?1 IS NULL OR account.source_id = ?1) AND (?2 IS NULL OR account.account_id = ?2 \
+         OR account.account_id = (SELECT merged_into_account_id FROM account WHERE account_id = ?2))";
 
 /// A window's values as the provider reported them. When it was reported is left out: a
 /// hard refresh that read the same values changed nothing a reader acts on, and its time

@@ -6,7 +6,7 @@ import { settle } from "../../api/client";
 import type { LeveragePeriod } from "../../api/leverage";
 import { updatePlan } from "../../api/plans";
 import type { QuotaCalibration, QuotaWindow } from "../../api/quota";
-import { accountLabel, isRetired, planLabel } from "../../domain/account";
+import { accountLabel, isRetired, planLabel, signInDescription } from "../../domain/account";
 import { formatLeverage, formatMoment, formatUsd, formatUtcDay } from "../../domain/format";
 import type { AccountLeverage, PlanEndSuggestion, PlanHistory } from "../../domain/leverage";
 import { hasHistory, isBreakingEven, isEnded, periodProgress, periodText, planSpanText, planTotals, reportedPlanChange, shownHistory, suggestedPlanEnd } from "../../domain/leverage";
@@ -14,6 +14,8 @@ import { redact } from "../../domain/privacy";
 import { AccountName, AuthKindIcon } from "../AccountName";
 import { BUTTON } from "../Control";
 import { providerBrandColor } from "../ProviderIcon";
+import type { PlanContinuation, PlanDecision } from "./PlanContinuationNotice";
+import { PlanContinuationNotice } from "./PlanContinuationNotice";
 import type { PlanEditing } from "./PlanDialog";
 import { PlanDialog } from "./PlanDialog";
 import { PlanSettings } from "./PlanSettings";
@@ -136,7 +138,6 @@ const PlanEndNotice = (properties: { suggestion: PlanEndSuggestion; onChanged: (
         {properties.suggestion.lastRequestAt === undefined
           ? "The plan is still open, but this credential carried no requests."
           : `The plan is still open. The last request was ${formatMoment(properties.suggestion.lastRequestAt)}.`}
-        {properties.suggestion.isRemoved ? " If the credential was replaced by a new sign-in, merge it into the new one on the Accounts page instead." : ""}
       </p>
       <button
         type="button"
@@ -190,12 +191,14 @@ const WindowValues = (properties: { windows: readonly QuotaWindow[]; }) => {
 
 export const AccountLeverageCard = (properties: {
   entry: AccountLeverage;
+  continuations: readonly PlanContinuation[];
   isSourceShown: boolean;
   isSelected: boolean;
   nowMs: number;
   windows: readonly QuotaWindow[] | undefined;
   onSelect: () => void;
   onChanged: () => void;
+  onDecide: (decision: PlanDecision) => void;
 }) => {
   const [editing, setEditing] = createSignal<PlanEditing | undefined>();
   const retirement = createMemo(() => retirementText(properties.entry.account));
@@ -233,6 +236,9 @@ export const AccountLeverageCard = (properties: {
           onChanged={properties.onChanged}
         />
       </div>
+      <Show when={properties.continuations.length > 0}>
+        <p class="text-xs text-slate-600 dark:text-slate-400">{signInDescription(properties.entry.account)}</p>
+      </Show>
       <Show when={retirement()}>
         {text => (
           <p class="-mt-1.5 flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-400">
@@ -245,11 +251,16 @@ export const AccountLeverageCard = (properties: {
         <Match when={properties.entry.active}>
           {active => <PlanSummary history={active()} nowMs={properties.nowMs} />}
         </Match>
+        <Match when={properties.entry.account.credentials.length > 0 ? shownHistory(properties.entry) : undefined}>
+          {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
+        </Match>
         <Match when={isRetired(properties.entry.account) ? undefined : properties.entry.account.plan}>
           {detected => (
             <>
               <div class="space-y-1.5">
-                <p class="text-4xl leading-none font-semibold text-slate-300 dark:text-slate-700">?</p>
+                <Show when={properties.continuations.length === 0}>
+                  <p class="text-4xl leading-none font-semibold text-slate-300 dark:text-slate-700">?</p>
+                </Show>
                 <p class="flex flex-wrap items-center gap-x-1 text-xs">
                   <span class="flex shrink-0 text-slate-500 dark:text-slate-400">
                     <TbOutlineCreditCard size={14} aria-hidden="true" />
@@ -257,17 +268,21 @@ export const AccountLeverageCard = (properties: {
                   <span class="font-semibold text-slate-900 dark:text-slate-100">{planLabel(properties.entry.account.provider, detected())}</span>
                   <span class="text-slate-500 dark:text-slate-400">detected by CLIProxy</span>
                 </p>
-                <p class="text-xs text-slate-600 dark:text-slate-400">{`No price entered for the ${planLabel(properties.entry.account.provider, detected())} plan, so its leverage is unknown.`}</p>
+                <Show when={properties.continuations.length === 0}>
+                  <p class="text-xs text-slate-600 dark:text-slate-400">{`No price entered for the ${planLabel(properties.entry.account.provider, detected())} plan, so its leverage is unknown.`}</p>
+                </Show>
               </div>
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setEditing({ plan: undefined, suggestedName: planLabel(properties.entry.account.provider, detected()) })}
-                  class="relative z-10 rounded-control bg-(--brand) px-3 py-1 text-sm font-medium text-white hover:bg-[color-mix(in_srgb,var(--brand)_85%,black)]"
-                >
-                  Track this plan
-                </button>
-              </div>
+              <Show when={properties.continuations.length === 0}>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ plan: undefined, suggestedName: planLabel(properties.entry.account.provider, detected()) })}
+                    class="relative z-10 rounded-control bg-(--brand) px-3 py-1 text-sm font-medium text-white hover:bg-[color-mix(in_srgb,var(--brand)_85%,black)]"
+                  >
+                    Track this plan
+                  </button>
+                </div>
+              </Show>
             </>
           )}
         </Match>
@@ -275,7 +290,48 @@ export const AccountLeverageCard = (properties: {
           {history => <PlanSummary history={history()} nowMs={properties.nowMs} />}
         </Match>
       </Switch>
-      <Show when={suggestion()}>
+      <Show when={properties.entry.account.credentials.length > 0
+        && properties.entry.histories.length > 0
+        && properties.entry.active === undefined
+        && !isRetired(properties.entry.account)
+        ? properties.entry.account.plan
+        : undefined}
+      >
+        {detected => (
+          <div class="relative z-10">
+            <button
+              type="button"
+              onClick={() => setEditing({ plan: undefined, suggestedName: planLabel(properties.entry.account.provider, detected()) })}
+              class={[BUTTON, "min-h-10"]}
+            >
+              Track a current plan
+            </button>
+          </div>
+        )}
+      </Show>
+      <Show when={properties.continuations.length > 0}>
+        <PlanContinuationNotice continuations={properties.continuations} nowMs={properties.nowMs} onDecide={properties.onDecide} />
+      </Show>
+      <Show when={properties.entry.account.credentials.length > 0}>
+        <details class="relative z-10 space-y-2 border-t border-hairline pt-2 text-xs text-slate-600 dark:text-slate-400">
+          <summary class="min-h-10 cursor-pointer py-2.5">{`Credentials, ${properties.entry.account.credentials.length + 1} sign-ins`}</summary>
+          <ul class="space-y-3 wrap-break-word tabular-nums">
+            <li>
+              <p class="font-medium">{`Current sign-in, ${accountLabel(properties.entry.account)}`}</p>
+              <p>{`${properties.entry.account.event_count} requests in the combined history`}</p>
+            </li>
+            <For each={properties.entry.account.credentials}>
+              {credential => (
+                <li>
+                  <p class="font-medium">{`Previous sign-in, ${accountLabel(credential.account)}`}</p>
+                  <p>{`Seen ${formatMoment(credential.first_seen_at)} to ${formatMoment(credential.last_seen_at)}`}</p>
+                </li>
+              )}
+            </For>
+          </ul>
+        </details>
+      </Show>
+      <Show when={properties.continuations.length === 0 && suggestion()}>
         {end => <PlanEndNotice suggestion={end()} onChanged={properties.onChanged} />}
       </Show>
       <Show when={changed()}>
