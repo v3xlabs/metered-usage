@@ -71,9 +71,13 @@ export const QuotaCard = (properties: {
   const [isResetting, setIsResetting] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
   const isSoftBehind = createMemo(() => isBehind(properties.entry.soft_observed_at, properties.latestSoft));
-  const isHardBehind = createMemo(() =>
-    properties.entry.hard_refresh_error !== undefined
-    || (properties.entry.hard_refreshable && isBehind(properties.entry.hard_refreshed_at, properties.latestHard)));
+  // An expired sign-in's failed attempts are said by the sign-in notice, not as a refresh age.
+  const isSignInExpired = (): boolean => properties.entry.sign_in_error === "expired";
+  const isHardBehind = createMemo(() => !isSignInExpired()
+    && (properties.entry.hard_refresh_error !== undefined
+      || (properties.entry.hard_refreshable && isBehind(properties.entry.hard_refreshed_at, properties.latestHard))));
+  const isStale = (): boolean => properties.entry.disabled || isSignInExpired();
+  const lastReportedAt = (): string | undefined => latestMoment(properties.entry.windows.map(window => window.observed_at));
   // CLIProxy names no single moment the account returns, so the latest one it gave is taken.
   const backAt = createMemo(() => (properties.entry.unavailable
     ? properties.entry.next_retry_after ?? latestMoment(properties.entry.cooldowns.map(cooldown => cooldown.retry_at))
@@ -204,7 +208,7 @@ export const QuotaCard = (properties: {
           </Show>
           {/* CLIProxy's own word for a turned-off credential is "disabled", which the mark
               above already says. Its status is not hidden when that mark is not shown. */}
-          <Show when={properties.entry.disabled && properties.entry.status?.toLowerCase() === "disabled" ? undefined : properties.entry.status}>
+          <Show when={isSignInExpired() || (properties.entry.disabled && properties.entry.status?.toLowerCase() === "disabled") ? undefined : properties.entry.status}>
             {status => <StatusMark tone="neutral" text={status()} />}
           </Show>
           <span class="ml-auto whitespace-nowrap text-slate-500 tabular-nums dark:text-slate-400" title={properties.entry.last_used_at === undefined ? undefined : formatMoment(properties.entry.last_used_at)}>
@@ -212,7 +216,33 @@ export const QuotaCard = (properties: {
           </span>
         </div>
       </div>
-      <Show when={properties.entry.status_message}>
+      <Show when={isSignInExpired()}>
+        <div class="space-y-1 text-sm">
+          <p class="font-semibold text-amber-700 dark:text-amber-400">Sign-in expired</p>
+          <Show
+            when={properties.entry.reauthentication}
+            fallback={<p class="text-xs text-slate-600 dark:text-slate-400">{`Sign in to this account again in CLIProxy.${properties.entry.hard_refreshable ? " Then refresh this card, or wait a few minutes." : ""}`}</p>}
+          >
+            {reauthentication => (
+              <>
+                <a
+                  href={reauthentication().url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="font-medium wrap-break-word text-amber-800 underline underline-offset-2 hover:text-amber-950 focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-amber-300 dark:hover:text-amber-100"
+                >
+                  Sign in again in CLIProxy
+                </a>
+                <p class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">
+                  {`Press ${reauthentication().button}.${properties.entry.hard_refreshable ? " Then refresh this card, or wait a few minutes." : ""}`}
+                </p>
+              </>
+            )}
+          </Show>
+        </div>
+      </Show>
+      {/* An expired sign-in's message only repeats the notice above. */}
+      <Show when={isSignInExpired() ? undefined : properties.entry.status_message}>
         {message => (
           <p title={statusText(message()) === message() ? undefined : redact(message())} class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">
             {redact(statusText(message()))}
@@ -221,23 +251,31 @@ export const QuotaCard = (properties: {
       </Show>
       <Show
         when={properties.entry.windows.length > 0}
-        fallback={<p class="text-xs text-slate-500 dark:text-slate-500">No quota windows reported.</p>}
+        fallback={<Show when={!isSignInExpired()}><p class="text-xs text-slate-500 dark:text-slate-500">No quota windows reported.</p></Show>}
       >
         {/* A turned-off credential carries no traffic, so its windows are what the provider
             last reported rather than what they hold now. The moment is absolute, so the one
-            line saying the data is not live is not the line that moves. */}
-        <Show when={properties.entry.disabled}>
-          <p class="text-xs text-slate-500 dark:text-slate-500">
-            {`Last known, as read at ${formatMoment(latestMoment(properties.entry.windows.map(window => window.observed_at)) ?? "")}.`}
-          </p>
-        </Show>
+            line saying the data is not live is not the line that moves. An expired sign-in
+            cannot be read again, so how old its last report is matters more than when. */}
+        <Switch>
+          <Match when={isSignInExpired()}>
+            <p class="text-xs text-slate-500 tabular-nums dark:text-slate-500" title={formatMoment(lastReportedAt() ?? "")}>
+              {`Last reported ${formatAge(lastReportedAt(), properties.nowMs)}.`}
+            </p>
+          </Match>
+          <Match when={properties.entry.disabled}>
+            <p class="text-xs text-slate-500 dark:text-slate-500">
+              {`Last known, as read at ${formatMoment(lastReportedAt() ?? "")}.`}
+            </p>
+          </Match>
+        </Switch>
         <ul class="space-y-2.5">
           <For each={properties.entry.windows}>
             {window => (
               <WindowRow
                 window={window}
                 isUnavailable={properties.entry.unavailable}
-                isStale={properties.entry.disabled}
+                isStale={isStale()}
                 nowMs={properties.nowMs}
               />
             )}
@@ -304,7 +342,7 @@ export const QuotaCard = (properties: {
           </Show>
         </dl>
       </Show>
-      <Show when={properties.entry.hard_refresh_error}>
+      <Show when={isSignInExpired() ? undefined : properties.entry.hard_refresh_error}>
         {error => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}
       </Show>
       <Show when={failure()}>

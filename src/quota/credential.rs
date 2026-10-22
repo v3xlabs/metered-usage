@@ -13,6 +13,8 @@ use crate::id::Id;
 use crate::quota::management::AuthFile;
 use crate::quota::manual_reset::{Credit, Grant};
 use crate::quota::provider::Provider;
+use crate::quota::provider::RefreshError;
+use crate::quota::sign_in::{Reauthentication, SignInError};
 use crate::quota::window::QuotaWindow;
 use crate::source::Source;
 
@@ -22,6 +24,7 @@ const SELECT: &str = "SELECT account.account_id, account.source_id, source.name 
      credential_state.unavailable, credential_state.next_retry_after, credential_state.cooldowns, \
      credential_state.account_type, credential_state.plan, credential_state.soft_observed_at, \
      credential_state.hard_refreshed_at, credential_state.hard_refresh_error, \
+     credential_state.sign_in_error, source.base_url AS source_base_url, \
      credential_state.hard_refreshable, credential_state.removed_at, \
      (SELECT MAX(occurred_at) FROM usage_event \
          WHERE usage_event.account_id = account.account_id) AS last_used_at \
@@ -50,6 +53,10 @@ pub struct QuotaAccount {
     pub soft_observed_at: Option<StoredTimestamp>,
     pub hard_refreshed_at: Option<StoredTimestamp>,
     pub hard_refresh_error: Option<String>,
+    pub sign_in_error: Option<SignInError>,
+    source_base_url: String,
+    #[sqlx(skip)]
+    pub reauthentication: Option<Reauthentication>,
     pub hard_refreshable: bool,
     /// When CLIProxy's credential list first left the credential out, as it does once the
     /// credential is deleted or replaced by a new sign-in.
@@ -95,6 +102,9 @@ impl QuotaAccount {
                 },
             );
         for account in &mut accounts {
+            account.reauthentication = account.sign_in_error.and_then(|_| {
+                Reauthentication::new(&account.source_base_url, &account.account.provider)
+            });
             account.windows = windows.remove(&account.account.id).unwrap_or_default();
             account.manual_resets = manual_resets
                 .remove(&account.account.id)
@@ -209,18 +219,25 @@ impl QuotaAccount {
         connection: &mut SqliteConnection,
         account_id: Id<Account>,
         at: Timestamp,
-        outcome: Result<Option<&str>, &str>,
+        outcome: Result<Option<&str>, &RefreshError>,
     ) -> Result<(), DatabaseError> {
-        let (plan, error) = match outcome {
-            Ok(plan) => (plan, None),
-            Err(error) => (None, Some(error)),
+        let (plan, error, sign_in_error) = match outcome {
+            Ok(plan) => (plan, None, None),
+            Err(error) => (
+                None,
+                Some(error.to_string()),
+                matches!(error, RefreshError::SignInExpired).then_some(SignInError::Expired),
+            ),
         };
         sqlx::query(
             "UPDATE credential_state SET hard_refreshed_at = ?, hard_refresh_error = ?, \
+             sign_in_error = CASE WHEN ? THEN NULL ELSE COALESCE(?, sign_in_error) END, \
              plan = COALESCE(?, plan) WHERE account_id = ?",
         )
         .bind(StoredTimestamp::from(at))
         .bind(error)
+        .bind(outcome.is_ok())
+        .bind(sign_in_error)
         .bind(plan)
         .bind(account_id)
         .execute(connection)

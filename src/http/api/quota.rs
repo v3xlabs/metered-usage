@@ -13,6 +13,7 @@ use crate::quota::calibration::{Calibration, Outlier};
 use crate::quota::credential::{Cooldown, QuotaAccount};
 use crate::quota::manual_reset::{Grant, ResetRequestError};
 use crate::quota::prediction::Prediction;
+use crate::quota::sign_in::{Reauthentication, SignInError};
 use crate::quota::window::QuotaWindow;
 use crate::quota::{RefreshRequestError, SourceFailure};
 
@@ -397,6 +398,13 @@ pub struct QuotaAccountOutput {
     hard_refreshed_at: Option<String>,
     /// Why the last hard refresh failed; absent after a successful one.
     hard_refresh_error: Option<String>,
+    /// An explicit 401 expired-token answer. A later successful quota read clears it; the
+    /// service rereads credentials in this state after each sync. CLIProxy credentials it no
+    /// longer lists keep it, so check `removed_at`. Read again after `account.changed`; window
+    /// ages remain in `windows[].observed_at`.
+    sign_in_error: Option<SignInError>,
+    /// Absent unless sign-in expired and this provider has a verified management UI action.
+    reauthentication: Option<Reauthentication>,
     /// Whether the provider has an adapter and the credential carries what it needs.
     hard_refreshable: bool,
     /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
@@ -427,6 +435,8 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             soft_observed_at: account.soft_observed_at.map(|at| at.0.to_string()),
             hard_refreshed_at: account.hard_refreshed_at.map(|at| at.0.to_string()),
             hard_refresh_error: account.hard_refresh_error,
+            sign_in_error: account.sign_in_error,
+            reauthentication: account.reauthentication,
             hard_refreshable: account.hard_refreshable,
             removed_at: account.removed_at.map(|at| at.0.to_string()),
             last_used_at: account.last_used_at.map(|at| at.0.to_string()),

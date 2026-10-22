@@ -26,7 +26,7 @@ const ACCOUNTS: &str = "SELECT account.account_id, json_array(source.name, accou
          FROM json_each(credential_state.cooldowns) AS cooldown), \
      credential_state.account_type, credential_state.plan, credential_state.hard_refreshable, \
      credential_state.hard_refreshed_at, credential_state.hard_refresh_error, \
-     credential_state.removed_at, \
+     credential_state.removed_at, credential_state.sign_in_error, source.base_url, \
      (SELECT json_group_array(json_array(previous.account_id, previous.label, previous.display_name, \
          previous.provider, previous.auth_kind, previous.first_seen_at, previous.last_seen_at) \
          ORDER BY previous.account_id) FROM account AS previous \

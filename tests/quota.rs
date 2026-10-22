@@ -1,3 +1,6 @@
+#[path = "quota/sign_in_expired.rs"]
+mod sign_in_expired;
+
 use std::sync::{Arc, Mutex};
 
 use jiff::{SignedDuration, Timestamp};
@@ -35,6 +38,7 @@ struct Calls {
     disabled: Arc<Mutex<Vec<&'static str>>>,
     /// Listings served so far; each is observed one second after the last.
     listings: Arc<Mutex<i64>>,
+    claude_response: Arc<Mutex<Option<(u16, Value)>>>,
 }
 
 impl Calls {
@@ -184,6 +188,19 @@ fn api_call(request: &Request, Data(calls): Data<&Calls>, Json(call): Json<Value
         received.push(call.clone());
     }
     let url = call["url"].as_str().unwrap_or_default();
+    if url == "https://api.anthropic.com/api/oauth/usage"
+        && let Some((status, body)) = calls
+            .claude_response
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+    {
+        // A string is the provider's plain-text body; anything else is its JSON.
+        let body = body
+            .as_str()
+            .map_or_else(|| body.to_string(), str::to_owned);
+        return Json(json!({ "status_code": status, "body": body })).into_response();
+    }
     let (status, body) = match url {
         "https://api.anthropic.com/api/oauth/usage" => (
             200,

@@ -142,6 +142,8 @@ pub enum RefreshError {
     Management(#[from] ManagementError),
     #[error("the provider answered {0}")]
     Upstream(u16),
+    #[error("OAuth access token has expired. Re-authenticate to continue.")]
+    SignInExpired,
     #[error("the provider's answer was not the expected JSON")]
     Unreadable,
     #[error("the provider reported no quota")]
@@ -163,10 +165,19 @@ pub enum RefreshError {
 /// The provider's answer as JSON, or why it is not one.
 fn answer(response: ApiResponse) -> Result<Value, RefreshError> {
     let ApiResponse { status_code, body } = response;
+    if status_code == 401 && says_token_expired(&body) {
+        return Err(RefreshError::SignInExpired);
+    }
     if !(200..300).contains(&status_code) {
         return Err(RefreshError::Upstream(status_code));
     }
     serde_json::from_str::<Value>(body.trim()).map_err(|_| RefreshError::Unreadable)
+}
+
+/// Whether a 401 body says the OAuth access token expired. CLIProxy passes the provider's
+/// body through as it came, as JSON or as text, so the text is searched as a whole.
+fn says_token_expired(body: &str) -> bool {
+    body.contains("OAuth access token has expired")
 }
 
 /// The first of `keys` present and not null, for payloads that spell a field two ways.

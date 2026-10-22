@@ -9,9 +9,20 @@ use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::conditional::conditional;
 use crate::prelude::*;
+use crate::quota::sign_in::{Reauthentication, SignIn, SignInError};
 
 pub struct AccountApi {
     pub state: Arc<AppState>,
+}
+
+impl AccountApi {
+    async fn output(&self, account: Account) -> Result<AccountOutput, DatabaseError> {
+        let sign_in = SignIn::list(&self.state.database, Some(account.summary.id))
+            .await?
+            .remove(&account.summary.id)
+            .unwrap_or_default();
+        Ok((account, sign_in).into())
+    }
 }
 
 #[OpenApi]
@@ -23,6 +34,8 @@ impl AccountApi {
     /// `plan_continuation_account_ids` suggests replacements for a removed credential,
     /// never an identity. Read again after `account.changed` or `plan.changed`. `credentials`
     /// lists previous sign-ins explicitly merged into the account.
+    /// `sign_in_error` and `reauthentication` match `/quota`; `account.changed` announces
+    /// expiry and recovery. Read `/quota` for retained window values and their `observed_at`.
     #[oai(
         path = "/accounts",
         method = "get",
@@ -40,9 +53,21 @@ impl AccountApi {
         )
     )]
     async fn list_accounts(&self) -> AccountListResponse {
+        let mut sign_ins = match SignIn::list(&self.state.database, None).await {
+            Ok(sign_ins) => sign_ins,
+            Err(error) => {
+                return AccountListResponse::Failed(Json(failure("list_accounts", &error)));
+            }
+        };
         match Account::list(&self.state.database).await {
             Ok(accounts) => AccountListResponse::Found(Json(AccountList {
-                accounts: accounts.into_iter().map(AccountOutput::from).collect(),
+                accounts: accounts
+                    .into_iter()
+                    .map(|account| {
+                        let sign_in = sign_ins.remove(&account.summary.id).unwrap_or_default();
+                        (account, sign_in).into()
+                    })
+                    .collect(),
             })),
             Err(error) => AccountListResponse::Failed(Json(failure("list_accounts", &error))),
         }
@@ -69,7 +94,10 @@ impl AccountApi {
             .map(str::trim)
             .filter(|name| !name.is_empty());
         match Account::rename(&self.state.database, account_id, display_name).await {
-            Ok(Some(account)) => AccountResponse::Found(Json(Box::new(account.into()))),
+            Ok(Some(account)) => match self.output(account).await {
+                Ok(output) => AccountResponse::Found(Json(Box::new(output))),
+                Err(error) => AccountResponse::Failed(Json(failure("update_account", &error))),
+            },
             Ok(None) => AccountResponse::Missing(Json(missing())),
             Err(error) => AccountResponse::Failed(Json(failure("update_account", &error))),
         }
@@ -102,7 +130,10 @@ impl AccountApi {
         )
         .await
         {
-            Ok(account) => MergeResponse::Merged(Json(Box::new(account.into()))),
+            Ok(account) => match self.output(account).await {
+                Ok(output) => MergeResponse::Merged(Json(Box::new(output))),
+                Err(error) => MergeResponse::Failed(Json(failure("merge_account", &error))),
+            },
             Err(MergeError::Missing) => MergeResponse::Missing(Json(missing())),
             Err(
                 error @ (MergeError::Same
@@ -192,6 +223,10 @@ struct AccountOutput {
     status: Option<String>,
     /// Turned off in CLIProxy.
     disabled: bool,
+    /// An explicit 401 expired-token answer; only a successful quota read clears it.
+    sign_in_error: Option<SignInError>,
+    /// Absent unless sign-in expired and this provider has a verified management UI action.
+    reauthentication: Option<Reauthentication>,
     /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
     /// no longer lists it.
     removed_at: Option<String>,
@@ -212,8 +247,8 @@ struct AccountOutput {
     replaced_by_account_id: Option<String>,
 }
 
-impl From<Account> for AccountOutput {
-    fn from(account: Account) -> Self {
+impl From<(Account, SignIn)> for AccountOutput {
+    fn from((account, sign_in): (Account, SignIn)) -> Self {
         let summary = account.summary;
         Self {
             account_id: summary.id.encode(),
@@ -228,6 +263,8 @@ impl From<Account> for AccountOutput {
             plan: account.plan,
             status: account.status,
             disabled: account.disabled,
+            sign_in_error: sign_in.error,
+            reauthentication: sign_in.reauthentication,
             removed_at: account.removed_at.map(|at| at.0.to_string()),
             last_used_at: account.last_used_at.map(|at| at.0.to_string()),
             first_seen_at: account.first_seen_at.to_string(),

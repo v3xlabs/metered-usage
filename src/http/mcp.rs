@@ -266,6 +266,10 @@ struct QuotaAccountOutput {
     soft_observed_at: Option<String>,
     hard_refreshed_at: Option<String>,
     hard_refresh_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in_error: Option<crate::quota::sign_in::SignInError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reauthentication: Option<crate::quota::sign_in::Reauthentication>,
     hard_refreshable: bool,
     windows: Vec<QuotaWindowOutput>,
     manual_resets: Vec<ManualResetOutput>,
@@ -297,6 +301,8 @@ impl From<QuotaAccount> for QuotaAccountOutput {
             soft_observed_at: account.soft_observed_at.map(|at| at.0.to_string()),
             hard_refreshed_at: account.hard_refreshed_at.map(|at| at.0.to_string()),
             hard_refresh_error: account.hard_refresh_error,
+            sign_in_error: account.sign_in_error,
+            reauthentication: account.reauthentication,
             hard_refreshable: account.hard_refreshable,
             windows: account
                 .windows

@@ -106,6 +106,8 @@ export interface paths {
          *     `plan_continuation_account_ids` suggests replacements for a removed credential,
          *     never an identity. Read again after `account.changed` or `plan.changed`. `credentials`
          *     lists previous sign-ins explicitly merged into the account.
+         *     `sign_in_error` and `reauthentication` match `/quota`; `account.changed` announces
+         *     expiry and recovery. Read `/quota` for retained window values and their `observed_at`.
          */
         get: operations["list_accounts"];
         put?: never;
@@ -708,6 +710,10 @@ export interface components {
             status?: string;
             /** @description Turned off in CLIProxy. */
             disabled: boolean;
+            /** @description An explicit 401 expired-token answer; only a successful quota read clears it. */
+            sign_in_error?: components["schemas"]["SignInError"] & unknown;
+            /** @description Absent unless sign-in expired and this provider has a verified management UI action. */
+            reauthentication?: components["schemas"]["Reauthentication"] & unknown;
             /**
              * @description When CLIProxy's credential list first left the credential out. Present while CLIProxy
              *     no longer lists it.
@@ -1153,6 +1159,15 @@ export interface components {
             hard_refreshed_at?: string;
             /** @description Why the last hard refresh failed; absent after a successful one. */
             hard_refresh_error?: string;
+            /**
+             * @description An explicit 401 expired-token answer. A later successful quota read clears it; the
+             *     service rereads credentials in this state after each sync. CLIProxy credentials it no
+             *     longer lists keep it, so check `removed_at`. Read again after `account.changed`; window
+             *     ages remain in `windows[].observed_at`.
+             */
+            sign_in_error?: components["schemas"]["SignInError"] & unknown;
+            /** @description Absent unless sign-in expired and this provider has a verified management UI action. */
+            reauthentication?: components["schemas"]["Reauthentication"] & unknown;
             /** @description Whether the provider has an adapter and the credential carries what it needs. */
             hard_refreshable: boolean;
             /**
@@ -1276,6 +1291,13 @@ export interface components {
         };
         /** @enum {string} */
         RankBy: "list_cost_usd" | "billed_cost_usd" | "total_tokens" | "requests";
+        /** Reauthentication */
+        Reauthentication: {
+            /** @description CLIProxy's management UI OAuth page. Never contains a management key. */
+            url: string;
+            /** @description What to press on that page, in English. */
+            button: string;
+        };
         /** RepriceInput */
         RepriceInput: {
             from?: string;
@@ -1344,6 +1366,11 @@ export interface components {
             last_at: string;
             metrics: components["schemas"]["UsageMetrics"];
         };
+        /**
+         * @description An observed sign-in failure. Absence does not claim the credential is healthy.
+         * @enum {string}
+         */
+        SignInError: "expired";
         /** Source */
         Source: {
             source_id: string;

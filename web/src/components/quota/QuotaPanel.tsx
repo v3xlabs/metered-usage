@@ -56,9 +56,14 @@ export const QuotaPanel = () => {
     .toSorted(byLastUse));
   const hasRefreshable = createMemo(() => current().some(entry => entry.hard_refreshable));
   // Every listing stamps the retired credentials it still names too, so they date the last sync.
+  // An expired sign-in is rechecked on its own, so its attempts do not date the panel's refresh,
+  // unless every credential is expired and they are the only refreshes there are.
   const latest = createMemo((): Latest => ({
     soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
-    hard: latestMoment(current().map(entry => entry.hard_refreshed_at)),
+    hard: latestMoment(current()
+      .filter(entry => entry.sign_in_error === undefined)
+      .map(entry => entry.hard_refreshed_at))
+    ?? latestMoment(current().map(entry => entry.hard_refreshed_at)),
   }));
   // The next moment a window resets, as reported or as predicted after an earlier reset.
   const nextResetMs = createMemo(() => {

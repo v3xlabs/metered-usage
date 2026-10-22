@@ -2,8 +2,10 @@
 //!
 //! A soft sync reads CLIProxy's own credential list, which reaches no provider, and runs on
 //! a timer. A hard refresh asks each provider through CLIProxy's `api-call`, exactly as the
-//! official management UI does, and runs only when asked. CLIProxy keeps nothing of a hard
-//! refresh, so the windows stored here are the only record of it.
+//! official management UI does, and runs when asked, and on that timer for a credential
+//! whose sign-in expired, so a new sign-in clears the state without anyone pressing refresh.
+//! CLIProxy keeps nothing of a hard refresh, so the windows stored here are the only record
+//! of it.
 
 pub mod calibration;
 pub mod credential;
@@ -12,6 +14,7 @@ pub mod manual_reset;
 pub mod prediction;
 pub mod provider;
 pub mod response;
+pub mod sign_in;
 pub mod window;
 
 use std::sync::Arc;
@@ -32,6 +35,7 @@ use crate::quota::credential::QuotaAccount;
 use crate::quota::management::{AuthFile, AuthFiles, Management, ManagementError};
 use crate::quota::manual_reset::Credit;
 use crate::quota::provider::{Provider, RefreshError};
+use crate::quota::sign_in::SignIn;
 use crate::quota::window::QuotaWindow;
 use crate::source::{Source, SourceKind};
 
@@ -83,8 +87,8 @@ pub enum RefreshRequestError {
     Unreachable(SourceFailure),
 }
 
-/// Soft syncs every CLIProxy source now and then every [`SOFT_SYNC_INTERVAL`]. Never hard
-/// refreshes.
+/// Soft syncs every CLIProxy source now and then every [`SOFT_SYNC_INTERVAL`], and after each
+/// one hard refreshes only the credentials whose sign-in expired.
 pub fn spawn(state: Arc<AppState>) {
     response::spawn(Arc::clone(&state));
     tokio::spawn(async move {
@@ -93,8 +97,26 @@ pub fn spawn(state: Arc<AppState>) {
         loop {
             interval.tick().await;
             sync_logged(&state, None).await;
+            recheck_expired(&state).await;
         }
     });
+}
+
+/// Hard refreshes each credential whose sign-in expired, one provider call each, until a
+/// read succeeds and clears the state. Failures are logged.
+pub async fn recheck_expired(state: &AppState) {
+    let accounts = match SignIn::expired(&state.database).await {
+        Ok(accounts) => accounts,
+        Err(error) => {
+            tracing::error!(%error, "expired sign-ins could not be listed");
+            return;
+        }
+    };
+    for account_id in accounts {
+        if let Err(error) = refresh(state, &state.http, Some(account_id)).await {
+            tracing::warn!(%account_id, %error, "recheck of an expired sign-in failed");
+        }
+    }
 }
 
 /// [`sync`] for a caller that has no one to answer, so failures are logged.
@@ -325,8 +347,7 @@ async fn record(
             .await?;
         }
         Err(error) => {
-            QuotaAccount::refreshed(&mut transaction, account_id, at, Err(&error.to_string()))
-                .await?;
+            QuotaAccount::refreshed(&mut transaction, account_id, at, Err(error)).await?;
         }
     }
     snapshot.record_changes(&mut transaction).await?;
