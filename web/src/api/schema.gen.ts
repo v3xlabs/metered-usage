@@ -588,7 +588,13 @@ export interface paths {
          *     App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
          *     Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
          *     Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
-         * @description Automatic provider recovery is disabled. Gateway credential-list sync remains automatic.
+         * @description Automatic sign-in recovery uses only non-spending quota/status readers, waits 3 minutes
+         *     from discovering an expired account, then doubles to at most 6 hours. It shares
+         *     history/deduplication with human actions. Only successful provider reads clear backoff;
+         *     gateway actions, failed reads and human reuse do not reset it. Scheduled reservations
+         *     advance backoff even when they reuse a human result without another provider read.
+         *     Paid probes, including xAI chat,
+         *     always require a human. Meta key creation is also human-only. Gateway sync is unchanged.
          *     An account can reuse a preceding bulk response, including its original scope and counts.
          *     Bulk requests skip recently refreshed accounts and identify them in `shared_actions`.
          *     A reset's follow-up observation is also reused, so refresh does not repeat it.
@@ -688,7 +694,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Durable human quota action history, oldest first, at most 50 records after `after`.
+         * Durable human and automatic recovery quota action history, oldest first, at most 50 records after `after`.
          *     Follow `quota.action` on /events, then reread this history. Running records can change:
          *     retain their `action_id` and reread from just before it until `finished_at` is present.
          *     An unfinished record after a restart has unknown outcome. Do not retry a quota reset.

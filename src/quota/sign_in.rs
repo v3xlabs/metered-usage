@@ -109,4 +109,18 @@ impl SignIn {
             })
             .collect())
     }
+    /// The credentials CLIProxy still lists and has not turned off whose last quota read said
+    /// the sign-in expired.
+    pub async fn expired(database: &Database) -> Result<Vec<Id<Account>>, DatabaseError> {
+        Ok(sqlx::query_scalar(
+            "SELECT credential_state.account_id FROM credential_state \
+             JOIN account ON account.account_id = credential_state.account_id \
+             JOIN source ON source.source_id = account.source_id \
+             WHERE credential_state.sign_in_error IS NOT NULL AND credential_state.removed_at IS NULL \
+             AND credential_state.disabled = 0 AND credential_state.hard_refreshable = 1 \
+             AND source.enabled = 1",
+        )
+        .fetch_all(&database.pool)
+        .await?)
+    }
 }

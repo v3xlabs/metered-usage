@@ -102,6 +102,21 @@ impl<E: Endpoint> SharedAction<E> {
         let source_id = (self.kind == "soft_refresh")
             .then(|| input.get("source_id").and_then(Value::as_str))
             .flatten();
+        if identity.transport == "internal" && self.kind == "hard_refresh" {
+            let Some(account_id) = account_id.and_then(|id| id.parse::<Id<Account>>().ok()) else {
+                return Ok(Response::builder().status(StatusCode::NO_CONTENT).finish());
+            };
+            if !crate::quota::recovery::Recovery::claim_due(
+                &state.database,
+                account_id,
+                Timestamp::now(),
+            )
+            .await
+            .map_err(poem::error::InternalServerError)?
+            {
+                return Ok(Response::builder().status(StatusCode::NO_CONTENT).finish());
+            }
+        }
         let api = QuotaApi::new(Arc::clone(&state));
         let result = self
             .run(
@@ -269,5 +284,30 @@ fn rejection(
         ))
     } else {
         None
+    }
+}
+
+/// Internal recovery uses the exact human-action claim and completion path, without
+/// fabricating an admin credential or exposing an unauthenticated HTTP route.
+pub async fn automatic_recovery(state: Arc<AppState>, account_id: Id<Account>) {
+    let endpoint = poem::endpoint::make(move |request: Request| async move {
+        let state = request
+            .data::<Arc<AppState>>()
+            .ok_or_else(|| poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?
+            .clone();
+        Ok::<_, poem::Error>(QuotaApi::new(state).recovery_refresh(account_id).await)
+    });
+    let mut request = Request::builder()
+        .method(poem::http::Method::POST)
+        .header("Content-Type", "application/json")
+        .header("X-Quota-Client", "automatic recovery")
+        .body(serde_json::json!({"account_id": account_id.encode()}).to_string());
+    request.extensions_mut().insert(state);
+    request.extensions_mut().insert(CredentialIdentity {
+        credential_id: "internal:automatic-recovery".to_owned(),
+        transport: "internal".to_owned(),
+    });
+    if let Err(error) = share_hard_refresh(endpoint).call(request).await {
+        tracing::error!(%error, %account_id, "automatic recovery failed");
     }
 }

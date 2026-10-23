@@ -10,3 +10,4 @@
 - The change feed reports action updates.
 - Live provider work survives caller disconnects and HTTP wait timeouts.
 - An abandoned worker's action closes so the next request can run.
+- Automatic recovery makes no provider call, records each attempt as `automatic recovery`, and backs off from 3 minutes to 6 hours.

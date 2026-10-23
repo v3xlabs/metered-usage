@@ -36,6 +36,17 @@ pub enum Provider {
 }
 
 impl Provider {
+    /// Only known quota/status readers can run without a human. xAI sends a paid
+    /// chat completion; Meta creates a key and has no verified read-only contract.
+    /// New adapters must explicitly choose a policy in this exhaustive match.
+    #[must_use]
+    pub fn allows_automatic_recovery(self) -> bool {
+        match self {
+            Self::Claude | Self::Codex | Self::Antigravity | Self::Kimi | Self::Devin => true,
+            Self::Xai | Self::Meta => false,
+        }
+    }
+
     /// Whether the entry carries what the adapter needs. The UI never refreshes a disabled
     /// credential either.
     #[must_use]
