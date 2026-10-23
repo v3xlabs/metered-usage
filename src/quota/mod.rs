@@ -2,8 +2,8 @@
 //!
 //! A soft sync reads CLIProxy's own credential list, which reaches no provider, and runs on
 //! a timer. A hard refresh asks each provider through CLIProxy's `api-call`, exactly as the
-//! official management UI does. Automatic provider recovery is disabled here; gateway
-//! credential-list sync never calls a provider.
+//! official management UI does. Automatic recovery uses only non-spending quota/status
+//! readers with durable backoff. Paid probes always require a human.
 //! CLIProxy keeps nothing of a hard refresh, so the windows stored here are the only record
 //! of it.
 
@@ -14,6 +14,7 @@ pub mod management;
 pub mod manual_reset;
 pub mod prediction;
 pub mod provider;
+pub mod recovery;
 pub mod response;
 pub mod reuse;
 pub mod sign_in;
@@ -92,7 +93,7 @@ pub enum RefreshRequestError {
 }
 
 /// Soft syncs gateway credential lists now and every [`SOFT_SYNC_INTERVAL`].
-/// Automatic provider recovery is disabled; provider requests require a human.
+/// Non-spending recovery runs only when its durable per-account deadline is due.
 pub fn spawn(state: Arc<AppState>) {
     response::spawn(Arc::clone(&state));
     tokio::spawn(async move {
@@ -101,6 +102,7 @@ pub fn spawn(state: Arc<AppState>) {
         loop {
             interval.tick().await;
             sync_logged(&state, None).await;
+            recovery::recover_expired(Arc::clone(&state)).await;
         }
     });
 }
@@ -148,6 +150,24 @@ pub async fn refresh(
     client: &Client,
     only: Option<Id<Account>>,
 ) -> Result<Refresh, RefreshRequestError> {
+    refresh_inner(state, client, only, false).await
+}
+
+/// Provider safety is checked against the live listing, not just cached account data.
+pub async fn refresh_automatic(
+    state: &AppState,
+    client: &Client,
+    only: Id<Account>,
+) -> Result<Refresh, RefreshRequestError> {
+    refresh_inner(state, client, Some(only), true).await
+}
+
+async fn refresh_inner(
+    state: &AppState,
+    client: &Client,
+    only: Option<Id<Account>>,
+    automatic: bool,
+) -> Result<Refresh, RefreshRequestError> {
     let requested_at = Timestamp::now();
     let source_id = match only {
         Some(id) => Some(
@@ -183,6 +203,7 @@ pub async fn refresh(
             .into_iter()
             .filter(|(account_id, ..)| only.is_none_or(|only| only == *account_id))
             .filter_map(|(account_id, file, provider)| Some((account_id, file, provider?)))
+            .filter(|(_, _, provider)| !automatic || provider.allows_automatic_recovery())
             .collect::<Vec<_>>();
         found |= !targets.is_empty();
         let mut fresh = Vec::new();
@@ -335,6 +356,10 @@ async fn record(
     let snapshot = Snapshot::quota(&mut transaction, Scope::Account(account_id)).await?;
     match result {
         Ok(observation) => {
+            sqlx::query("DELETE FROM quota_recovery WHERE account_id = ?")
+                .bind(account_id)
+                .execute(&mut *transaction)
+                .await?;
             QuotaWindow::replace(&mut transaction, account_id, &observation.windows, at).await?;
             if let provider::ManualResets::Reported(grants) = &observation.manual_resets {
                 Credit::replace(&mut transaction, account_id, grants).await?;

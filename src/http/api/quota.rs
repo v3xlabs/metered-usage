@@ -24,6 +24,18 @@ pub struct QuotaApi {
 }
 
 impl QuotaApi {
+    pub async fn recovery_refresh(&self, account_id: Id<Account>) -> poem::Response {
+        use poem::IntoResponse;
+        self.refresh_quota_mode(
+            Json(QuotaRefreshInput {
+                account_id: Some(account_id.encode()),
+            }),
+            true,
+        )
+        .await
+        .into_response()
+    }
+
     #[must_use]
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
@@ -151,7 +163,13 @@ impl QuotaApi {
     /// Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
     /// Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
     ///
-    /// Automatic provider recovery is disabled. Gateway credential-list sync remains automatic.
+    /// Automatic sign-in recovery uses only non-spending quota/status readers, waits 3 minutes
+    /// from discovering an expired account, then doubles to at most 6 hours. It shares
+    /// history/deduplication with human actions. Only successful provider reads clear backoff;
+    /// gateway actions, failed reads and human reuse do not reset it. Scheduled reservations
+    /// advance backoff even when they reuse a human result without another provider read.
+    /// Paid probes, including xAI chat,
+    /// always require a human. Meta key creation is also human-only. Gateway sync is unchanged.
     /// An account can reuse a preceding bulk response, including its original scope and counts.
     /// Bulk requests skip recently refreshed accounts and identify them in `shared_actions`.
     /// A reset's follow-up observation is also reused, so refresh does not repeat it.
@@ -371,6 +389,13 @@ impl QuotaApi {
         }
     }
     async fn refresh_quota_inner(&self, input: Json<QuotaRefreshInput>) -> QuotaRefreshResponse {
+        self.refresh_quota_mode(input, false).await
+    }
+    async fn refresh_quota_mode(
+        &self,
+        input: Json<QuotaRefreshInput>,
+        automatic: bool,
+    ) -> QuotaRefreshResponse {
         let only = match input.0.account_id.as_deref().map(str::parse::<Id<Account>>) {
             None => None,
             Some(Ok(id)) => Some(id),
@@ -378,7 +403,14 @@ impl QuotaApi {
                 return QuotaRefreshResponse::Missing(Json(message("account was not found")));
             }
         };
-        let refresh = match crate::quota::refresh(&self.state, &self.state.http, only).await {
+        let result = match (automatic, only) {
+            (true, Some(id)) => {
+                crate::quota::refresh_automatic(&self.state, &self.state.http, id).await
+            }
+            (true, None) => Err(RefreshRequestError::NotRefreshable),
+            (false, only) => crate::quota::refresh(&self.state, &self.state.http, only).await,
+        };
+        let refresh = match result {
             Ok(refresh) => refresh,
             Err(RefreshRequestError::UnknownAccount) => {
                 return QuotaRefreshResponse::Missing(Json(message("account was not found")));

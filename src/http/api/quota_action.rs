@@ -1,4 +1,4 @@
-//! Durable records of human actions. Snapshots contain public quota data, never tokens.
+//! Durable records of human actions and automatic recovery. Snapshots contain public quota data, never tokens.
 
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
@@ -57,7 +57,7 @@ pub struct ActionApi {
 
 #[OpenApi]
 impl ActionApi {
-    /// Durable human quota action history, oldest first, at most 50 records after `after`.
+    /// Durable human and automatic recovery quota action history, oldest first, at most 50 records after `after`.
     /// Follow `quota.action` on /events, then reread this history. Running records can change:
     /// retain their `action_id` and reread from just before it until `finished_at` is present.
     /// An unfinished record after a restart has unknown outcome. Do not retry a quota reset.
