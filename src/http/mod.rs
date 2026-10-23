@@ -3,6 +3,9 @@ pub mod assets;
 pub mod auth;
 pub mod conditional;
 pub mod mcp;
+pub mod quota_action;
+pub mod quota_action_owner;
+mod quota_action_store;
 
 use std::sync::Arc;
 
@@ -32,6 +35,7 @@ type Apis = (
     plan::PlanApi,
     leverage::LeverageApi,
     quota::QuotaApi,
+    crate::http::api::quota_action::ActionApi,
     change::ChangeApi,
     usage_summary::UsageSummaryApi,
 );
@@ -70,6 +74,9 @@ pub fn service(state: &Arc<AppState>) -> OpenApiService<Apis, ()> {
                 state: Arc::clone(state),
             },
             quota::QuotaApi::new(Arc::clone(state)),
+            crate::http::api::quota_action::ActionApi {
+                state: Arc::clone(state),
+            },
             change::ChangeApi {
                 state: Arc::clone(state),
             },
@@ -95,7 +102,7 @@ pub fn routes(state: &Arc<AppState>) -> impl Endpoint<Output = poem::Response> +
     Route::new()
         .nest(
             MOUNT,
-            api.with(RequireCredential {
+            api.data(Arc::clone(state)).with(RequireCredential {
                 credentials: state.credentials.clone(),
             }),
         )

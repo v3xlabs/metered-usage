@@ -132,6 +132,7 @@ async fn service(
     let token = Token::try_from(TEST_ACCESS_TOKEN.to_owned())?;
     let state = Arc::new(AppState::new(database, token.into(), config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
+        .default_header("X-Quota-Client", "test-ui")
         .default_header(header::AUTHORIZATION, format!("Bearer {TEST_ACCESS_TOKEN}"));
 
     Ok((client, state))
@@ -199,7 +200,11 @@ async fn a_hard_refresh_reaches_a_waiting_long_poll_within_a_second() {
     let cursor = latest(&client).await;
 
     let waiting = async {
-        let answer = changes(&client, &format!("cursor={cursor}&timeout=30")).await;
+        let answer = changes(
+            &client,
+            &format!("cursor={cursor}&timeout=30&kinds=account.changed,quota.updated"),
+        )
+        .await;
         (answer, Instant::now())
     };
     let refreshing = async {
@@ -238,7 +243,7 @@ async fn a_hard_refresh_reaches_a_waiting_long_poll_within_a_second() {
 #[tokio::test]
 async fn a_cursor_resumes_after_the_last_change_it_read() {
     let upstream = Upstream::new(0.37);
-    let (client, _state) = service(&upstream).await.expect("a service");
+    let (client, state) = service(&upstream).await.expect("a service");
     let account = account_id(&hard_refresh(&client).await);
     let seen = latest(&client).await;
 
@@ -249,8 +254,10 @@ async fn a_cursor_resumes_after_the_last_change_it_read() {
     // The same report changes no window, only when the account was last refreshed. A reset
     // a provider gives as seconds from now lands a second or two apart on each answer.
     upstream.with(|reported| reported.resets_at = "2099-01-01T00:00:02Z");
+    expire_actions(&state).await;
     hard_refresh(&client).await;
     upstream.with(|reported| reported.used = 0.5);
+    expire_actions(&state).await;
     hard_refresh(&client).await;
     let response = client
         .patch(format!("/api/accounts/{account}"))
@@ -276,9 +283,13 @@ async fn a_cursor_resumes_after_the_last_change_it_read() {
     assert_eq!(
         named(&resumed),
         [
+            "quota.action",
             "account.changed",
+            "quota.action",
+            "quota.action",
             "account.changed",
             "quota.updated five-hour",
+            "quota.action",
             "account.changed",
             "price.changed claude-opus-4",
         ]
@@ -410,19 +421,31 @@ async fn an_unchanged_list_answers_not_modified() {
 #[tokio::test]
 async fn a_soft_sync_records_only_what_moved() {
     let upstream = Upstream::new(0.37);
-    let (client, _state) = service(&upstream).await.expect("a service");
+    let (client, state) = service(&upstream).await.expect("a service");
+    expire_actions(&state).await;
     send(&client, "/api/quota/sync", &json!({})).await;
     let seen = latest(&client).await;
 
     // CLIProxy counts the cooldown down on every listing; when it ends has not moved.
+    expire_actions(&state).await;
     send(&client, "/api/quota/sync", &json!({})).await;
     let (_, unchanged) = changes(&client, &format!("cursor={seen}&timeout=0")).await;
-    assert_eq!(named(&unchanged), Vec::<String>::new());
+    assert_eq!(named(&unchanged), ["quota.action", "quota.action"]);
 
     upstream.with(|reported| reported.retry_at = "2099-01-01T19:00:00Z");
+    expire_actions(&state).await;
     send(&client, "/api/quota/sync", &json!({})).await;
     let (_, moved) = changes(&client, &format!("cursor={seen}&timeout=0")).await;
-    assert_eq!(named(&moved), ["account.changed"]);
+    assert_eq!(
+        named(&moved),
+        [
+            "quota.action",
+            "quota.action",
+            "quota.action",
+            "account.changed",
+            "quota.action"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -504,4 +527,11 @@ async fn record_prices(state: &AppState, models: &[&str]) -> Result<(), Database
         .await?;
     }
     write.commit().await
+}
+
+// These event tests exercise separate human actions outside the shared-result window.
+async fn expire_actions(state: &AppState) {
+    let result = sqlx::query("UPDATE quota_action SET finished_at = '2000-01-01T00:00:00Z' WHERE finished_at IS NOT NULL")
+        .execute(&state.database.pool).await;
+    assert!(result.is_ok(), "expire completed actions: {result:?}");
 }

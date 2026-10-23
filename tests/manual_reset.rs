@@ -237,9 +237,9 @@ fn reset_quota(
     Json(json!({ "status": "ok", "auth_index": body["auth_index"], "models": [] })).into_response()
 }
 
-async fn service(
+async fn service_with_state(
     upstream: &Upstream,
-) -> Result<TestClient<impl poem::Endpoint>, Box<dyn std::error::Error>> {
+) -> Result<(TestClient<impl poem::Endpoint>, Arc<AppState>), Box<dyn std::error::Error>> {
     let acceptor = TcpListener::bind("127.0.0.1:0").into_acceptor().await?;
     let address = acceptor
         .local_addr()
@@ -264,8 +264,19 @@ async fn service(
     let token = Token::try_from(TEST_ACCESS_TOKEN.to_owned())?;
     let state = Arc::new(AppState::new(database, token.into(), config)?);
 
-    Ok(TestClient::new(metered_usage::http::routes(&state))
-        .default_header(header::AUTHORIZATION, format!("Bearer {TEST_ACCESS_TOKEN}")))
+    Ok((
+        TestClient::new(metered_usage::http::routes(&state))
+            .default_header("X-Quota-Client", "test-ui")
+            .default_header(header::AUTHORIZATION, format!("Bearer {TEST_ACCESS_TOKEN}")),
+        state,
+    ))
+}
+
+async fn service(
+    upstream: &Upstream,
+) -> Result<TestClient<impl poem::Endpoint>, Box<dyn std::error::Error>> {
+    let (client, _) = service_with_state(upstream).await?;
+    Ok(client)
 }
 
 async fn send(
@@ -337,7 +348,7 @@ fn expiries(account: &Value) -> Vec<&str> {
 #[tokio::test]
 async fn a_hard_refresh_lists_unexpired_manual_resets_and_keeps_them_when_the_list_fails() {
     let upstream = Upstream::new();
-    let client = service(&upstream).await.expect("a service");
+    let (client, state) = service_with_state(&upstream).await.expect("a service");
     refreshed(&client).await;
     let calls = upstream.with(|state| state.calls.len());
 
@@ -372,6 +383,7 @@ async fn a_hard_refresh_lists_unexpired_manual_resets_and_keeps_them_when_the_li
     );
 
     upstream.with(|state| state.credits_fail = true);
+    expire_actions(&state).await;
     let (status, again) = send(&client, "/api/quota/refresh", &json!({})).await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["failed"], 0);
@@ -460,11 +472,12 @@ async fn a_confirmed_reset_spends_one_then_clears_the_cooldown_and_refreshes_the
 async fn a_spent_reset_whose_refresh_fails_answers_failed_and_is_not_offered_again() {
     let upstream = Upstream::new();
     upstream.with(|state| state.credits = vec![SOONEST]);
-    let client = service(&upstream).await.expect("a service");
+    let (client, state) = service_with_state(&upstream).await.expect("a service");
     let (codex, _) = refreshed(&client).await;
     upstream.with(|state| state.usage_fails_after_reset = true);
     let before = changes(&client, "").await;
 
+    expire_actions(&state).await;
     let (status, spent) = reset(&client, &codex).await;
     assert_eq!(status, StatusCode::OK, "{spent}");
     assert_eq!(spent["refreshed"], 0);
@@ -485,11 +498,14 @@ async fn a_spent_reset_whose_refresh_fails_answers_failed_and_is_not_offered_aga
     assert_eq!(
         named,
         [
+            (json!("quota.action"), Value::Null),
             (json!("reset.updated"), json!(codex)),
             (json!("account.changed"), json!(codex)),
+            (json!("quota.action"), Value::Null),
         ]
     );
 
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &codex).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(
@@ -506,10 +522,11 @@ async fn an_unknown_reset_outcome_blocks_further_consumes_until_the_provider_lis
         (200_u16, json!({ "code": "not_eligible" })),
     ] {
         let upstream = Upstream::new();
-        let client = service(&upstream).await.expect("a service");
+        let (client, state) = service_with_state(&upstream).await.expect("a service");
         let (codex, _) = refreshed(&client).await;
         upstream.with(|state| state.consume_response = answer);
 
+        expire_actions(&state).await;
         let (status, failed) = reset(&client, &codex).await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
         assert_eq!(upstream.sent(CONSUME_URL).len(), 1);
@@ -519,6 +536,7 @@ async fn an_unknown_reset_outcome_blocks_further_consumes_until_the_provider_lis
         );
         assert!(expiries(by_provider(&listed(&client).await, "codex")).is_empty());
 
+        expire_actions(&state).await;
         let (status, refused) = reset(&client, &codex).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert_eq!(
@@ -532,6 +550,7 @@ async fn an_unknown_reset_outcome_blocks_further_consumes_until_the_provider_lis
         assert!(expiries(by_provider(&synced, "codex")).is_empty());
 
         upstream.with(|state| state.usage_fails_after_reset = true);
+        expire_actions(&state).await;
         let (status, failed) = send(&client, "/api/quota/refresh", &json!({})).await;
         assert_eq!(status, StatusCode::OK, "{failed}");
         assert_eq!(failed["failed"], 1);
@@ -541,19 +560,24 @@ async fn an_unknown_reset_outcome_blocks_further_consumes_until_the_provider_lis
             state.usage_fails_after_reset = false;
             state.credits_fail = true;
         });
+        expire_actions(&state).await;
         refreshed(&client).await;
+        expire_actions(&state).await;
         let (status, refused) = reset(&client, &codex).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert_eq!(upstream.sent(CONSUME_URL).len(), 1);
 
         upstream.with(|state| state.credits_fail = false);
+        expire_actions(&state).await;
         refreshed(&client).await;
         assert_eq!(
             expiries(by_provider(&listed(&client).await, "codex")),
             [LATEST]
         );
+        expire_actions(&state).await;
         let (status, failed) = reset(&client, &codex).await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "{failed}");
+        expire_actions(&state).await;
         let (status, refused) = reset(&client, &codex).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
         assert_eq!(upstream.sent(CONSUME_URL).len(), 2);
@@ -572,11 +596,8 @@ async fn concurrent_resets_cannot_consume_two_credits_after_an_unknown_outcome()
 
     let ((first_status, _), (second_status, _)) =
         tokio::join!(reset(&client, &codex), reset(&client, &codex));
-    assert!(
-        (first_status == StatusCode::BAD_GATEWAY && second_status == StatusCode::BAD_REQUEST)
-            || (first_status == StatusCode::BAD_REQUEST
-                && second_status == StatusCode::BAD_GATEWAY)
-    );
+    assert_eq!(first_status, StatusCode::BAD_GATEWAY);
+    assert_eq!(second_status, first_status);
     assert_eq!(upstream.sent(CONSUME_URL).len(), 1);
     assert_eq!(
         upstream.with(|state| state.credits.clone()),
@@ -604,7 +625,7 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
         state.credits_recorded = Some(codex_credits);
         state.claude_grants = Some(claude_grants.clone());
     });
-    let client = service(&upstream).await.expect("a service");
+    let (client, state) = service_with_state(&upstream).await.expect("a service");
     let (_, claude) = refreshed(&client).await;
 
     let listed = listed(&client).await;
@@ -645,6 +666,7 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
     );
 
     upstream.with(|state| state.claude_grants = None);
+    expire_actions(&state).await;
     let (status, again) = send(&client, "/api/quota/refresh", &json!({})).await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(again["failed"], 0);
@@ -653,6 +675,7 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
     assert_eq!(account["windows"][0]["used_fraction"], 0.1);
 
     let calls = upstream.with(|state| state.calls.len());
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &claude).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
     assert_eq!(
@@ -663,6 +686,7 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
 
     upstream.with(|state| state.claude_usage_status = 503);
     let reads = upstream.sent(CLAUDE_RESET_GRANTS_URL).len();
+    expire_actions(&state).await;
     let (status, failed) = send(&client, "/api/quota/refresh", &json!({})).await;
     assert_eq!(status, StatusCode::OK, "{failed}");
     assert_eq!(failed["failed"], 1);
@@ -682,6 +706,7 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
         grant["resets_left"] = json!(0);
     }
     upstream.with(|state| state.claude_grants = Some(used_up));
+    expire_actions(&state).await;
     let (status, cleared) = send(&client, "/api/quota/refresh", &json!({})).await;
     assert_eq!(status, StatusCode::OK, "{cleared}");
     assert_eq!(by_provider(&cleared, "claude")["manual_resets"], json!([]));
@@ -690,15 +715,17 @@ async fn recorded_reset_lists_of_both_providers_list_as_grants() {
 #[tokio::test]
 async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() {
     let upstream = Upstream::new();
-    let client = service(&upstream).await.expect("a service");
+    let (client, state) = service_with_state(&upstream).await.expect("a service");
 
     let (status, synced) = send(&client, "/api/quota/sync", &json!({})).await;
     assert_eq!(status, StatusCode::OK, "{synced}");
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &account_id(&synced, "codex")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
 
     upstream.with(|state| state.credits = vec![EXPIRED]);
     let (codex, claude) = refreshed(&client).await;
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &codex).await;
     assert_eq!(
         status,
@@ -707,17 +734,21 @@ async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() 
     );
 
     upstream.with(|state| state.credits = vec![SOONEST]);
+    expire_actions(&state).await;
     refreshed(&client).await;
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &claude).await;
     assert_eq!(
         status,
         StatusCode::BAD_REQUEST,
         "no manual resets: {refused}"
     );
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, "not-an-id").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
 
     upstream.with(|state| state.codex = Listed::Disabled);
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &codex).await;
     assert_eq!(
         status,
@@ -730,6 +761,7 @@ async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() 
         "a disabled Codex credential lost its reset action"
     );
     upstream.with(|state| state.codex = Listed::Removed);
+    expire_actions(&state).await;
     let (status, refused) = reset(&client, &codex).await;
     assert_eq!(
         status,
@@ -741,4 +773,10 @@ async fn a_reset_that_cannot_be_spent_is_refused_before_the_provider_is_asked() 
         upstream.sent(CONSUME_URL).is_empty(),
         "a refused reset was sent"
     );
+}
+
+async fn expire_actions(state: &AppState) {
+    let result = sqlx::query("UPDATE quota_action SET finished_at = '2000-01-01T00:00:00Z' WHERE finished_at IS NOT NULL")
+        .execute(&state.database.pool).await;
+    assert!(result.is_ok(), "expire saved actions: {result:?}");
 }

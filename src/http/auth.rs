@@ -22,9 +22,10 @@ const OPEN: [(Method, &str); 3] = [
 
 /// Operations under [`crate::http::MOUNT`] the consumer token reaches, all `GET`: the
 /// change feed, the lists its changes name, and the request and failure counts per account.
-const CONSUMER_READS: [&str; 8] = [
+const CONSUMER_READS: [&str; 9] = [
     "/events",
     "/quota",
+    "/quota/actions",
     "/prices",
     "/accounts",
     "/usage/summary",
@@ -44,6 +45,14 @@ pub struct Credentials {
     /// follows quota, prices, aggregate usage, plans, account health counts and request
     /// arrivals, but cannot read request records.
     pub consumer_token: Option<Token>,
+}
+
+/// Credential role and transport, never a password-derived fingerprint. An app
+/// label identifies a claimed client; this identifies the authority that admitted it.
+#[derive(Clone)]
+pub struct CredentialIdentity {
+    pub credential_id: String,
+    pub transport: String,
 }
 
 #[derive(Clone)]
@@ -176,8 +185,24 @@ pub struct RequireCredentialEndpoint<E> {
 impl<E: Endpoint> Endpoint for RequireCredentialEndpoint<E> {
     type Output = Response;
 
-    async fn call(&self, request: Request) -> poem::Result<Self::Output> {
+    async fn call(&self, mut request: Request) -> poem::Result<Self::Output> {
         if self.credentials.admit(&request) {
+            if self.credentials.token.admits(&request) {
+                let identity = CredentialIdentity {
+                    credential_id: "admin".to_owned(),
+                    transport: if request
+                        .header(header::AUTHORIZATION)
+                        .and_then(|v| v.strip_prefix("Bearer "))
+                        .is_some_and(|v| self.credentials.token.matches(v))
+                    {
+                        "bearer"
+                    } else {
+                        "session"
+                    }
+                    .to_owned(),
+                };
+                request.extensions_mut().insert(identity);
+            }
             return Ok(self.inner.call(request).await?.into_response());
         }
 

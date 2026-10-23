@@ -541,7 +541,22 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reads CLIProxy's credential list now, which reaches no provider, and answers every
+         * Explicit gateway sync for a human UI gesture. It costs gateway traffic, not provider calls.
+         *     The server also syncs gateway lists automatically at startup, every 180 seconds and after ingestion.
+         *     These automatic gateway syncs are not provider refreshes or human action journal entries.
+         *     Concurrent requests and requests within 60 seconds of completion share the saved result.
+         *     Responses identify the original caller, request time and action through X-Quota headers.
+         *     Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+         *     After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+         *     Follow quota.action on /events and read /quota/actions for the final result; never retry.
+         *     Live work continues until completion even after disconnects. The next claim closes
+         *     abandoned records from a previous process. Cleared reset grants are never restored
+         *     by recovery; read the provider grant list before attempting another reset.
+         *     App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+         *     Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
+         *     Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
+         *     Soft refresh reaches the gateway only; provider quota windows remain cached.
+         * @description Reads CLIProxy's credential list now, which reaches no provider, and answers every
          *     credential. 502 names each source that could not be read; the others are stored.
          */
         post: operations["sync_quota"];
@@ -561,10 +576,28 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Asks each provider for its quota through CLIProxy, as the official management UI
+         * Costly operation intended only for direct human invocation, such as a UI button press.
+         *     Concurrent requests and requests within 60 seconds of completion share the saved result.
+         *     Responses identify the original caller, request time and action through X-Quota headers.
+         *     Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+         *     After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+         *     Follow quota.action on /events and read /quota/actions for the final result; never retry.
+         *     Live work continues until completion even after disconnects. The next claim closes
+         *     abandoned records from a previous process. Cleared reset grants are never restored
+         *     by recovery; read the provider grant list before attempting another reset.
+         *     App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+         *     Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
+         *     Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
+         * @description Automatic provider recovery is disabled. Gateway credential-list sync remains automatic.
+         *     An account can reuse a preceding bulk response, including its original scope and counts.
+         *     Bulk requests skip recently refreshed accounts and identify them in `shared_actions`.
+         *     A reset's follow-up observation is also reused, so refresh does not repeat it.
+         *
+         *     Asks each provider for its quota through CLIProxy, as the official management UI
          *     does, and answers every credential. Without `account_id` every hard-refreshable
          *     credential is refreshed. A credential whose provider fails records the reason in
          *     `hard_refresh_error` and counts in `failed`; it does not fail the request.
+         *     Bulk source failures appear in `source_failures` alongside successful counts, with HTTP 200.
          */
         post: operations["refresh_quota"];
         delete?: never;
@@ -583,7 +616,20 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Spends one manual reset the provider granted the account, then clears CLIProxy's
+         * Costly, irreversible operation intended only for direct human invocation with confirmation.
+         *     Concurrent requests and requests within 60 seconds of completion share the saved result.
+         *     Responses identify the original caller, request time and action through X-Quota headers.
+         *     Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+         *     After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+         *     Follow quota.action on /events and read /quota/actions for the final result; never retry.
+         *     Live work continues until completion even after disconnects. The next claim closes
+         *     abandoned records from a previous process. Cleared reset grants are never restored
+         *     by recovery; read the provider grant list before attempting another reset.
+         *     App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+         *     Never poll or schedule this route. Never retry automatically except to recover the same human gesture
+         *     with its original Idempotency-Key. Never generate a new key for an automatic retry.
+         *     OpenAI/Codex resets are supported. Anthropic grants are currently read-only.
+         * @description Spends one manual reset the provider granted the account, then clears CLIProxy's
          *     cooldowns on it and hard refreshes it, as the official management UI does. Only an
          *     explicit `confirmed: true` spends one, and a failed request is never retried here.
          *     A credential CLIProxy no longer lists, a disabled one, a provider whose resets cannot
@@ -601,6 +647,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/quota/cooldowns/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clears one account's CLIProxy scheduling cooldowns without spending a provider reset or fetching provider quota.
+         *     Costly operation intended only for direct human invocation, such as a UI button press.
+         *     Concurrent requests and requests within 60 seconds of completion share the saved result.
+         *     Responses identify the original caller, request time and action through X-Quota headers.
+         *     Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+         *     After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+         *     Follow quota.action on /events and read /quota/actions for the final result; never retry.
+         *     Live work continues until completion even after disconnects. The next claim closes
+         *     abandoned records from a previous process. Cleared reset grants are never restored
+         *     by recovery; read the provider grant list before attempting another reset.
+         *     App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+         *     Never poll or schedule this operation. Never retry automatically except to recover the same human gesture with its original
+         *     Idempotency-Key. Never generate a new key for an automatic retry. Read GET /quota and follow
+         *     /events for routine updates. `account_id` is required; there is no reset-all operation.
+         *     refreshed counts confirmed cooldown clears, failed counts unconfirmed clears.
+         */
+        post: operations["reset_quota_cooldowns"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/quota/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Durable human quota action history, oldest first, at most 50 records after `after`.
+         *     Follow `quota.action` on /events, then reread this history. Running records can change:
+         *     retain their `action_id` and reread from just before it until `finished_at` is present.
+         *     An unfinished record after a restart has unknown outcome. Do not retry a quota reset.
+         *     No provider or gateway request is made by this read.
+         */
+        get: operations["list_quota_actions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/events": {
         parameters: {
             query?: never;
@@ -612,7 +714,9 @@ export interface paths {
          * Changes after `cursor` to quota, resets, prices, accounts, plans and usage, and
          *     request arrivals, oldest first, as a long poll. With no changes, waits up to
          *     `timeout` seconds, default 30 and at most 50, and answers when a change commits.
-         * @description `quota.updated` names an account and window whose reported values changed;
+         * @description `quota.action` means a human quota action started or finished. Read `/quota/actions`
+         *     for timestamps, outcomes and saved observations, even if values did not change.
+         *     `quota.updated` names an account and window whose reported values changed;
          *     `reset.updated` an account whose manual resets changed; `account.changed` an
          *     account whose names, CLIProxy state, last hard refresh or `replaced_by_account_id`
          *     changed; `price.changed` a model whose latest price changed; `plan.changed` a plan
@@ -825,7 +929,7 @@ export interface components {
             cursor: number;
         };
         /** @enum {string} */
-        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed" | "plan.changed" | "usage.updated" | "request.arrived";
+        ChangeKind: "quota.updated" | "reset.updated" | "price.changed" | "account.changed" | "plan.changed" | "usage.updated" | "request.arrived" | "quota.action";
         /** ChangesExpired */
         ChangesExpired: {
             message: string;
@@ -1161,7 +1265,7 @@ export interface components {
             hard_refresh_error?: string;
             /**
              * @description An explicit 401 expired-token answer. A later successful quota read clears it; the
-             *     service rereads credentials in this state after each sync. CLIProxy credentials it no
+             *     user must refresh after signing in again. CLIProxy credentials it no
              *     longer lists keep it, so check `removed_at`. Read again after `account.changed`; window
              *     ages remain in `windows[].observed_at`.
              */
@@ -1185,6 +1289,56 @@ export interface components {
              */
             manual_resets: components["schemas"]["ManualReset"][];
         };
+        /** QuotaAction */
+        QuotaAction: {
+            /** Format: int64 */
+            action_id: number;
+            /** @description `soft_refresh`, `hard_refresh`, `cooldown_reset` or `quota_reset`. */
+            kind: string;
+            account_id?: string;
+            source_id?: string;
+            requested_at: string;
+            requested_by: string;
+            credential_id: string;
+            credential_transport: string;
+            requests: components["schemas"]["QuotaActionRequest"][];
+            finished_at?: string;
+            /**
+             * @description `succeeded`, `partial`, `rejected`, `failed`, `interrupted` or `reconciled_unknown`.
+             *     Absent while running, or if the process stopped before recording an outcome.
+             *     A failed or unfinished reset may have reached the provider. Never retry blindly.
+             */
+            outcome?: string;
+            /** @description JSON encoded `QuotaList`, limited to the requested scope, before the operation. */
+            before_state: string;
+            /** @description JSON encoded `QuotaList` after the operation, including partial observations on failure. */
+            after_state?: string;
+            /**
+             * Format: int64
+             * @description Saved HTTP result, including shared-action attribution and failures.
+             */
+            response_status?: number;
+            response_body?: string;
+        };
+        /**
+         * QuotaActionPending
+         * @description The HTTP wait ended; the action is queued or running and publishes its final result in history.
+         */
+        QuotaActionPending: {
+            /**
+             * Format: int64
+             * @description Read /quota/actions after `action_id` - 1 and follow quota.action on /events.
+             */
+            action_id: number;
+            message: string;
+        };
+        /** QuotaActionRequest */
+        QuotaActionRequest: {
+            requested_by: string;
+            requested_at: string;
+            credential_id: string;
+            credential_transport: string;
+        };
         /** QuotaCalibration */
         QuotaCalibration: {
             /**
@@ -1202,6 +1356,11 @@ export interface components {
              *     as one the provider reset early. Newest first.
              */
             outliers: components["schemas"]["QuotaOutlier"][];
+        };
+        /** QuotaCooldownResetInput */
+        QuotaCooldownResetInput: {
+            /** @description The account whose CLIProxy scheduling cooldowns should be cleared. Required. */
+            account_id: string;
         };
         /** QuotaList */
         QuotaList: {
@@ -1234,6 +1393,10 @@ export interface components {
             refreshed: number;
             /** Format: int64 */
             failed: number;
+            /** @description Sources that were unreachable. Successful sources and counts are retained. */
+            source_failures: components["schemas"]["QuotaSourceFailure"][];
+            /** @description Earlier per-account operations reused by a bulk operation, or bulk operations reused by an account request. */
+            shared_actions: components["schemas"]["SharedQuotaAction"][];
             accounts: components["schemas"]["QuotaAccount"][];
         };
         /** QuotaRefreshInput */
@@ -1245,6 +1408,11 @@ export interface components {
             account_id: string;
             /** @description Must be true: the reset is spent at the provider and cannot be taken back. */
             confirmed: boolean;
+        };
+        /** QuotaSourceFailure */
+        QuotaSourceFailure: {
+            source: string;
+            message: string;
         };
         /** QuotaSyncInput */
         QuotaSyncInput: {
@@ -1365,6 +1533,14 @@ export interface components {
             first_at: string;
             last_at: string;
             metrics: components["schemas"]["UsageMetrics"];
+        };
+        /** SharedQuotaAction */
+        SharedQuotaAction: {
+            /** Format: int64 */
+            action_id: number;
+            requested_by: string;
+            requested_at: string;
+            finished_at: string;
         };
         /**
          * @description An observed sign-in failure. Absence does not claim the credential is healthy.
@@ -2810,6 +2986,16 @@ export interface operations {
                     "application/json; charset=utf-8": components["schemas"]["QuotaList"];
                 };
             };
+            202: {
+                headers: {
+                    /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
+                    ETAG?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaActionPending"];
+                };
+            };
             400: {
                 headers: {
                     /** @description A tag of the answer's bytes, to send back in If-None-Match. Absent on an error. */
@@ -2835,7 +3021,12 @@ export interface operations {
     sync_quota: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport. */
+                "X-QUOTA-CLIENT": string;
+                /** @description Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key. */
+                "IDEMPOTENCY-KEY"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2847,14 +3038,52 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["QuotaList"];
                 };
             };
+            202: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaActionPending"];
+                };
+            };
             400: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2863,6 +3092,34 @@ export interface operations {
             };
             404: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            409: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2871,6 +3128,16 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2879,6 +3146,16 @@ export interface operations {
             };
             502: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2890,7 +3167,12 @@ export interface operations {
     refresh_quota: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport. */
+                "X-QUOTA-CLIENT": string;
+                /** @description Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key. */
+                "IDEMPOTENCY-KEY"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2902,14 +3184,52 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["QuotaRefresh"];
                 };
             };
+            202: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaActionPending"];
+                };
+            };
             400: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2918,6 +3238,34 @@ export interface operations {
             };
             404: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            409: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2926,6 +3274,16 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2934,6 +3292,16 @@ export interface operations {
             };
             502: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2945,7 +3313,12 @@ export interface operations {
     reset_quota: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport. */
+                "X-QUOTA-CLIENT": string;
+                /** @description Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key. */
+                "IDEMPOTENCY-KEY"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2957,14 +3330,52 @@ export interface operations {
         responses: {
             200: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json; charset=utf-8": components["schemas"]["QuotaRefresh"];
                 };
             };
+            202: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaActionPending"];
+                };
+            };
             400: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2973,6 +3384,34 @@ export interface operations {
             };
             404: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            409: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2981,6 +3420,16 @@ export interface operations {
             };
             500: {
                 headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2988,6 +3437,191 @@ export interface operations {
                 };
             };
             502: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    reset_quota_cooldowns: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport. */
+                "X-QUOTA-CLIENT": string;
+                /** @description Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key. */
+                "IDEMPOTENCY-KEY"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json; charset=utf-8": components["schemas"]["QuotaCooldownResetInput"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaRefresh"];
+                };
+            };
+            202: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaActionPending"];
+                };
+            };
+            400: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            404: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            409: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            500: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+            502: {
+                headers: {
+                    /** @description The durable action whose result this response carries. */
+                    "X-QUOTA-ACTION-ID"?: string;
+                    /** @description The app label on the original action. */
+                    "X-QUOTA-REQUESTED-BY"?: string;
+                    /** @description When the original action was requested, RFC 3339. */
+                    "X-QUOTA-REQUESTED-AT"?: string;
+                    /** @description When the shared action completed, RFC 3339. Absent for an unknown outcome. */
+                    "X-QUOTA-FINISHED-AT"?: string;
+                    /** @description true when this request started no new operation and received a saved result. */
+                    "X-QUOTA-REUSED"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    list_quota_actions: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json; charset=utf-8": components["schemas"]["QuotaAction"][];
+                };
+            };
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

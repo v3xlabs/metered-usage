@@ -182,7 +182,7 @@ pub async fn spend(
         Ok(()) => provider.fetch(&management, file, auth_index).await,
         Err(error) => Err(RefreshError::from(error)),
     };
-    record(state, account_id, &result, Timestamp::now()).await?;
+    record(state, account_id, &result, Timestamp::now(), false).await?;
     drop(reset_guard);
 
     Ok(match result {

@@ -27,6 +27,8 @@ impl ChangeApi {
     /// request arrivals, oldest first, as a long poll. With no changes, waits up to
     /// `timeout` seconds, default 30 and at most 50, and answers when a change commits.
     ///
+    /// `quota.action` means a human quota action started or finished. Read `/quota/actions`
+    /// for timestamps, outcomes and saved observations, even if values did not change.
     /// `quota.updated` names an account and window whose reported values changed;
     /// `reset.updated` an account whose manual resets changed; `account.changed` an
     /// account whose names, CLIProxy state, last hard refresh or `replaced_by_account_id`
@@ -146,7 +148,7 @@ impl From<Change> for ChangeOutput {
             ),
             Subject::Price { model } => (None, None, Some(model), None, None),
             Subject::Plan(plan_id) => (None, None, None, Some(plan_id.encode()), None),
-            Subject::Usage => (None, None, None, None, None),
+            Subject::Usage | Subject::QuotaAction => (None, None, None, None, None),
             Subject::Arrival { account_id, failed } => {
                 (Some(account_id.encode()), None, None, None, Some(failed))
             }
@@ -181,6 +183,8 @@ enum ChangeKindOutput {
     UsageUpdated,
     #[oai(rename = "request.arrived")]
     RequestArrived,
+    #[oai(rename = "quota.action")]
+    QuotaAction,
 }
 
 impl From<ChangeKind> for ChangeKindOutput {
@@ -193,6 +197,7 @@ impl From<ChangeKind> for ChangeKindOutput {
             ChangeKind::PlanChanged => Self::PlanChanged,
             ChangeKind::UsageUpdated => Self::UsageUpdated,
             ChangeKind::RequestArrived => Self::RequestArrived,
+            ChangeKind::QuotaAction => Self::QuotaAction,
         }
     }
 }

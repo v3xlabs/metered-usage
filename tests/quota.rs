@@ -302,6 +302,7 @@ async fn service(
     let token = Token::try_from(TOKEN.to_owned())?;
     let state = Arc::new(AppState::new(database, token.into(), config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
+        .default_header("X-Quota-Client", "test-ui")
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
 
     Ok((client, state))
@@ -415,8 +416,9 @@ async fn soft_sync_registers_every_credential_without_reaching_a_provider() {
 #[tokio::test]
 async fn a_turned_off_credential_stays_listed_with_its_windows_and_keeps_its_account() {
     let calls = Calls::default();
-    let (client, _state) = service(&calls).await.expect("a service");
+    let (client, state) = service(&calls).await.expect("a service");
     let sync = || async {
+        expire_actions(&state).await;
         let response = client
             .post("/api/quota/sync")
             .body_json(&json!({}))
@@ -532,8 +534,9 @@ async fn a_turned_off_credential_stays_listed_with_its_windows_and_keeps_its_acc
 #[tokio::test]
 async fn turning_a_credential_off_never_marks_it_removed() {
     let calls = Calls::default();
-    let (client, _state) = service(&calls).await.expect("a service");
+    let (client, state) = service(&calls).await.expect("a service");
     let sync = || async {
+        expire_actions(&state).await;
         let response = client
             .post("/api/quota/sync")
             .body_json(&json!({}))
@@ -569,10 +572,11 @@ async fn turning_a_credential_off_never_marks_it_removed() {
 #[tokio::test]
 async fn only_a_complete_listing_marks_a_credential_removed_and_listing_it_again_clears_that() {
     let calls = Calls::default();
-    let (client, _state) = service(&calls).await.expect("a service");
+    let (client, state) = service(&calls).await.expect("a service");
     let sync = |omitted: &[&'static str]| {
         calls.omit(omitted);
         async {
+            expire_actions(&state).await;
             let response = client
                 .post("/api/quota/sync")
                 .body_json(&json!({}))
@@ -771,6 +775,7 @@ async fn a_second_refresh_replaces_every_window() {
         .as_str()
         .expect("an id")
         .to_owned();
+    expire_actions(&state).await;
     let response = client
         .post("/api/quota/refresh")
         .body_json(&json!({ "account_id": account_id }))
@@ -1009,4 +1014,11 @@ async fn no_secret_reaches_a_response_or_the_database() {
         }
         assert!(!stored.contains(secret), "the database holds {secret}");
     }
+}
+
+// Model distinct human actions or timer ticks outside the minute of result sharing.
+async fn expire_actions(state: &AppState) {
+    let result = sqlx::query("UPDATE quota_action SET finished_at = '2000-01-01T00:00:00Z' WHERE finished_at IS NOT NULL")
+        .execute(&state.database.pool).await;
+    assert!(result.is_ok(), "expire completed actions: {result:?}");
 }

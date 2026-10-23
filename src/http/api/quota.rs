@@ -1,20 +1,22 @@
 use std::sync::Arc;
 
+use poem_openapi::OpenApi;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, OpenApi};
 
 use crate::app::AppState;
 use crate::http::api::Error;
-use crate::http::api::account::AccountSummaryOutput;
+use crate::http::api::quota_output::{
+    QuotaCooldownResetInput, QuotaList, QuotaListResponse, QuotaRefresh, QuotaRefreshInput,
+    QuotaRefreshResponse, QuotaResetInput, QuotaSyncInput, QuotaSyncResponse,
+};
 use crate::http::conditional::conditional;
+use crate::http::quota_action::{
+    share_cooldown_reset, share_hard_refresh, share_quota_reset, share_soft_refresh,
+};
 use crate::prelude::*;
-use crate::quota::calibration::{Calibration, Outlier};
-use crate::quota::credential::{Cooldown, QuotaAccount};
-use crate::quota::manual_reset::{Grant, ResetRequestError};
-use crate::quota::prediction::Prediction;
-use crate::quota::sign_in::{Reauthentication, SignInError};
-use crate::quota::window::QuotaWindow;
+use crate::quota::credential::QuotaAccount;
+use crate::quota::manual_reset::ResetRequestError;
 use crate::quota::{RefreshRequestError, SourceFailure};
 
 pub struct QuotaApi {
@@ -73,10 +75,269 @@ impl QuotaApi {
         }
     }
 
+    /// Explicit gateway sync for a human UI gesture. It costs gateway traffic, not provider calls.
+    /// The server also syncs gateway lists automatically at startup, every 180 seconds and after ingestion.
+    /// These automatic gateway syncs are not provider refreshes or human action journal entries.
+    /// Concurrent requests and requests within 60 seconds of completion share the saved result.
+    /// Responses identify the original caller, request time and action through X-Quota headers.
+    /// Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+    /// After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+    /// Follow quota.action on /events and read /quota/actions for the final result; never retry.
+    /// Live work continues until completion even after disconnects. The next claim closes
+    /// abandoned records from a previous process. Cleared reset grants are never restored
+    /// by recovery; read the provider grant list before attempting another reset.
+    /// App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+    /// Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
+    /// Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
+    /// Soft refresh reaches the gateway only; provider quota windows remain cached.
+    ///
     /// Reads CLIProxy's credential list now, which reaches no provider, and answers every
     /// credential. 502 names each source that could not be read; the others are stored.
-    #[oai(path = "/quota/sync", method = "post", operation_id = "sync_quota")]
+    #[oai(
+        path = "/quota/sync",
+        method = "post",
+        operation_id = "sync_quota",
+        transform = "share_soft_refresh",
+        request_header(
+            name = "X-Quota-Client",
+            ty = "String",
+            description = "Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport."
+        ),
+        request_header(
+            name = "Idempotency-Key",
+            ty = "Option<String>",
+            description = "Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key."
+        ),
+        response_header(
+            name = "X-Quota-Action-Id",
+            ty = "Option<String>",
+            description = "The durable action whose result this response carries."
+        ),
+        response_header(
+            name = "X-Quota-Requested-By",
+            ty = "Option<String>",
+            description = "The app label on the original action."
+        ),
+        response_header(
+            name = "X-Quota-Requested-At",
+            ty = "Option<String>",
+            description = "When the original action was requested, RFC 3339."
+        ),
+        response_header(
+            name = "X-Quota-Finished-At",
+            ty = "Option<String>",
+            description = "When the shared action completed, RFC 3339. Absent for an unknown outcome."
+        ),
+        response_header(
+            name = "X-Quota-Reused",
+            ty = "Option<String>",
+            description = "true when this request started no new operation and received a saved result."
+        )
+    )]
     async fn sync_quota(&self, input: Json<QuotaSyncInput>) -> QuotaSyncResponse {
+        self.sync_quota_inner(input).await
+    }
+
+    /// Costly operation intended only for direct human invocation, such as a UI button press.
+    /// Concurrent requests and requests within 60 seconds of completion share the saved result.
+    /// Responses identify the original caller, request time and action through X-Quota headers.
+    /// Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+    /// After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+    /// Follow quota.action on /events and read /quota/actions for the final result; never retry.
+    /// Live work continues until completion even after disconnects. The next claim closes
+    /// abandoned records from a previous process. Cleared reset grants are never restored
+    /// by recovery; read the provider grant list before attempting another reset.
+    /// App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+    /// Never poll or schedule this route. Never retry automatically except to recover the same human gesture with its original
+    /// Idempotency-Key. Never generate a new key for an automatic retry. Use GET /quota and /events.
+    ///
+    /// Automatic provider recovery is disabled. Gateway credential-list sync remains automatic.
+    /// An account can reuse a preceding bulk response, including its original scope and counts.
+    /// Bulk requests skip recently refreshed accounts and identify them in `shared_actions`.
+    /// A reset's follow-up observation is also reused, so refresh does not repeat it.
+    ///
+    /// Asks each provider for its quota through CLIProxy, as the official management UI
+    /// does, and answers every credential. Without `account_id` every hard-refreshable
+    /// credential is refreshed. A credential whose provider fails records the reason in
+    /// `hard_refresh_error` and counts in `failed`; it does not fail the request.
+    /// Bulk source failures appear in `source_failures` alongside successful counts, with HTTP 200.
+    #[oai(
+        path = "/quota/refresh",
+        method = "post",
+        operation_id = "refresh_quota",
+        transform = "share_hard_refresh",
+        request_header(
+            name = "X-Quota-Client",
+            ty = "String",
+            description = "Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport."
+        ),
+        request_header(
+            name = "Idempotency-Key",
+            ty = "Option<String>",
+            description = "Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key."
+        ),
+        response_header(
+            name = "X-Quota-Action-Id",
+            ty = "Option<String>",
+            description = "The durable action whose result this response carries."
+        ),
+        response_header(
+            name = "X-Quota-Requested-By",
+            ty = "Option<String>",
+            description = "The app label on the original action."
+        ),
+        response_header(
+            name = "X-Quota-Requested-At",
+            ty = "Option<String>",
+            description = "When the original action was requested, RFC 3339."
+        ),
+        response_header(
+            name = "X-Quota-Finished-At",
+            ty = "Option<String>",
+            description = "When the shared action completed, RFC 3339. Absent for an unknown outcome."
+        ),
+        response_header(
+            name = "X-Quota-Reused",
+            ty = "Option<String>",
+            description = "true when this request started no new operation and received a saved result."
+        )
+    )]
+    async fn refresh_quota(&self, input: Json<QuotaRefreshInput>) -> QuotaRefreshResponse {
+        self.refresh_quota_inner(input).await
+    }
+
+    /// Costly, irreversible operation intended only for direct human invocation with confirmation.
+    /// Concurrent requests and requests within 60 seconds of completion share the saved result.
+    /// Responses identify the original caller, request time and action through X-Quota headers.
+    /// Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+    /// After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+    /// Follow quota.action on /events and read /quota/actions for the final result; never retry.
+    /// Live work continues until completion even after disconnects. The next claim closes
+    /// abandoned records from a previous process. Cleared reset grants are never restored
+    /// by recovery; read the provider grant list before attempting another reset.
+    /// App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+    /// Never poll or schedule this route. Never retry automatically except to recover the same human gesture
+    /// with its original Idempotency-Key. Never generate a new key for an automatic retry.
+    /// OpenAI/Codex resets are supported. Anthropic grants are currently read-only.
+    ///
+    /// Spends one manual reset the provider granted the account, then clears CLIProxy's
+    /// cooldowns on it and hard refreshes it, as the official management UI does. Only an
+    /// explicit `confirmed: true` spends one, and a failed request is never retried here.
+    /// A credential CLIProxy no longer lists, a disabled one, a provider whose resets cannot
+    /// be spent here and an account without an unexpired one are refused before the provider
+    /// is asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
+    /// the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
+    /// and `manual_resets` stays empty until a provider list is read successfully. Stored
+    /// resets are cleared before the consuming request, so an unknown outcome also blocks
+    /// another reset across clients and restarts until a hard refresh reads that list.
+    #[oai(
+        path = "/quota/reset",
+        method = "post",
+        operation_id = "reset_quota",
+        transform = "share_quota_reset",
+        request_header(
+            name = "X-Quota-Client",
+            ty = "String",
+            description = "Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport."
+        ),
+        request_header(
+            name = "Idempotency-Key",
+            ty = "Option<String>",
+            description = "Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key."
+        ),
+        response_header(
+            name = "X-Quota-Action-Id",
+            ty = "Option<String>",
+            description = "The durable action whose result this response carries."
+        ),
+        response_header(
+            name = "X-Quota-Requested-By",
+            ty = "Option<String>",
+            description = "The app label on the original action."
+        ),
+        response_header(
+            name = "X-Quota-Requested-At",
+            ty = "Option<String>",
+            description = "When the original action was requested, RFC 3339."
+        ),
+        response_header(
+            name = "X-Quota-Finished-At",
+            ty = "Option<String>",
+            description = "When the shared action completed, RFC 3339. Absent for an unknown outcome."
+        ),
+        response_header(
+            name = "X-Quota-Reused",
+            ty = "Option<String>",
+            description = "true when this request started no new operation and received a saved result."
+        )
+    )]
+    async fn reset_quota(&self, input: Json<QuotaResetInput>) -> QuotaRefreshResponse {
+        self.reset_quota_inner(input).await
+    }
+
+    /// Clears one account's CLIProxy scheduling cooldowns without spending a provider reset or fetching provider quota.
+    /// Costly operation intended only for direct human invocation, such as a UI button press.
+    /// Concurrent requests and requests within 60 seconds of completion share the saved result.
+    /// Responses identify the original caller, request time and action through X-Quota headers.
+    /// Sharing includes operation failures and survives restarts. Invalid requests never fill the reuse window.
+    /// After 50 seconds of waiting for claimed work, HTTP 202 returns its `action_id`.
+    /// Follow quota.action on /events and read /quota/actions for the final result; never retry.
+    /// Live work continues until completion even after disconnects. The next claim closes
+    /// abandoned records from a previous process. Cleared reset grants are never restored
+    /// by recovery; read the provider grant list before attempting another reset.
+    /// App labels never bypass sharing. Saved counts and attribution accompany the current accounts list.
+    /// Never poll or schedule this operation. Never retry automatically except to recover the same human gesture with its original
+    /// Idempotency-Key. Never generate a new key for an automatic retry. Read GET /quota and follow
+    /// /events for routine updates. `account_id` is required; there is no reset-all operation.
+    /// refreshed counts confirmed cooldown clears, failed counts unconfirmed clears.
+    #[oai(
+        path = "/quota/cooldowns/reset",
+        method = "post",
+        operation_id = "reset_quota_cooldowns",
+        transform = "share_cooldown_reset",
+        request_header(
+            name = "X-Quota-Client",
+            ty = "String",
+            description = "Required app label, 1 to 80 printable ASCII characters. Self-reported, not proof of human identity. The journal separately records the authenticated credential role and transport."
+        ),
+        request_header(
+            name = "Idempotency-Key",
+            ty = "Option<String>",
+            description = "Optional key for one human gesture, 1 to 128 graphic ASCII characters. Reuse it for the same operation and scope to recover its result across timeouts and restarts, beyond the 60-second coalescing window. A different operation or scope returns 409. An unknown result never starts another operation for that key; after human reconciliation, a new deliberate gesture uses a new key."
+        ),
+        response_header(
+            name = "X-Quota-Action-Id",
+            ty = "Option<String>",
+            description = "The durable action whose result this response carries."
+        ),
+        response_header(
+            name = "X-Quota-Requested-By",
+            ty = "Option<String>",
+            description = "The app label on the original action."
+        ),
+        response_header(
+            name = "X-Quota-Requested-At",
+            ty = "Option<String>",
+            description = "When the original action was requested, RFC 3339."
+        ),
+        response_header(
+            name = "X-Quota-Finished-At",
+            ty = "Option<String>",
+            description = "When the shared action completed, RFC 3339. Absent for an unknown outcome."
+        ),
+        response_header(
+            name = "X-Quota-Reused",
+            ty = "Option<String>",
+            description = "true when this request started no new operation and received a saved result."
+        )
+    )]
+    async fn reset_cooldowns(&self, input: Json<QuotaCooldownResetInput>) -> QuotaRefreshResponse {
+        self.reset_cooldowns_inner(input).await
+    }
+}
+
+impl QuotaApi {
+    async fn sync_quota_inner(&self, input: Json<QuotaSyncInput>) -> QuotaSyncResponse {
         let only = match input.0.source_id.as_deref().map(str::parse::<Id<Source>>) {
             None => None,
             Some(Ok(id)) => match Source::load(&self.state.database, id).await {
@@ -109,17 +370,7 @@ impl QuotaApi {
             Err(error) => QuotaSyncResponse::Failed(Json(error)),
         }
     }
-
-    /// Asks each provider for its quota through CLIProxy, as the official management UI
-    /// does, and answers every credential. Without `account_id` every hard-refreshable
-    /// credential is refreshed. A credential whose provider fails records the reason in
-    /// `hard_refresh_error` and counts in `failed`; it does not fail the request.
-    #[oai(
-        path = "/quota/refresh",
-        method = "post",
-        operation_id = "refresh_quota"
-    )]
-    async fn refresh_quota(&self, input: Json<QuotaRefreshInput>) -> QuotaRefreshResponse {
+    async fn refresh_quota_inner(&self, input: Json<QuotaRefreshInput>) -> QuotaRefreshResponse {
         let only = match input.0.account_id.as_deref().map(str::parse::<Id<Account>>) {
             None => None,
             Some(Ok(id)) => Some(id),
@@ -132,7 +383,7 @@ impl QuotaApi {
             Err(RefreshRequestError::UnknownAccount) => {
                 return QuotaRefreshResponse::Missing(Json(message("account was not found")));
             }
-            Err(error @ RefreshRequestError::NotRefreshable) => {
+            Err(error @ (RefreshRequestError::NotRefreshable | RefreshRequestError::NotListed)) => {
                 return QuotaRefreshResponse::Invalid(Json(message(&error.to_string())));
             }
             Err(error @ RefreshRequestError::Unreachable(_)) => {
@@ -142,31 +393,18 @@ impl QuotaApi {
                 return QuotaRefreshResponse::Failed(Json(failure("refresh_quota", &error)));
             }
         };
-        if !refresh.unreachable.is_empty() {
-            return QuotaRefreshResponse::Unreachable(Json(unreachable(&refresh.unreachable)));
-        }
         match self.everything("refresh_quota").await {
             Ok(list) => QuotaRefreshResponse::Refreshed(Json(QuotaRefresh {
                 refreshed: refresh.refreshed,
                 failed: refresh.failed,
+                source_failures: refresh.unreachable.into_iter().map(Into::into).collect(),
+                shared_actions: refresh.shared_actions,
                 accounts: list.accounts,
             })),
             Err(error) => QuotaRefreshResponse::Failed(Json(error)),
         }
     }
-
-    /// Spends one manual reset the provider granted the account, then clears CLIProxy's
-    /// cooldowns on it and hard refreshes it, as the official management UI does. Only an
-    /// explicit `confirmed: true` spends one, and a failed request is never retried here.
-    /// A credential CLIProxy no longer lists, a disabled one, a provider whose resets cannot
-    /// be spent here and an account without an unexpired one are refused before the provider
-    /// is asked. Once the provider confirmed the reset the answer is 200: `failed` is 1 when
-    /// the quota could not be refreshed afterwards, with the reason in `hard_refresh_error`,
-    /// and `manual_resets` stays empty until a provider list is read successfully. Stored
-    /// resets are cleared before the consuming request, so an unknown outcome also blocks
-    /// another reset across clients and restarts until a hard refresh reads that list.
-    #[oai(path = "/quota/reset", method = "post", operation_id = "reset_quota")]
-    async fn reset_quota(&self, input: Json<QuotaResetInput>) -> QuotaRefreshResponse {
+    async fn reset_quota_inner(&self, input: Json<QuotaResetInput>) -> QuotaRefreshResponse {
         if !input.0.confirmed {
             return QuotaRefreshResponse::Invalid(Json(message(
                 "a manual reset is spent only when confirmed is true",
@@ -205,324 +443,47 @@ impl QuotaApi {
             Ok(list) => QuotaRefreshResponse::Refreshed(Json(QuotaRefresh {
                 refreshed: reset.refreshed,
                 failed: reset.failed,
+                source_failures: reset.unreachable.into_iter().map(Into::into).collect(),
+                shared_actions: reset.shared_actions,
                 accounts: list.accounts,
             })),
             Err(error) => QuotaRefreshResponse::Failed(Json(error)),
         }
     }
-}
 
-/// A provider-reported limit, from a hard refresh or a normal request's response.
-///
-/// `meta-subscription` records an exhausted Meta subscription and its reset from a 429,
-/// without inventing an amount or a window duration. A later success or the named reset
-/// removes it and records `quota.updated`, so consumers read this list again.
-#[derive(Debug, Object)]
-#[oai(rename = "QuotaWindow", skip_serializing_if_is_none)]
-pub struct QuotaWindowOutput {
-    window_key: String,
-    label: String,
-    /// Share of the window used, 0 to 1, whatever unit the provider counts in.
-    used_fraction: Option<f64>,
-    used_value: Option<f64>,
-    limit_value: Option<f64>,
-    /// What `used_value` and `limit_value` count.
-    unit: Option<String>,
-    window_seconds: Option<i64>,
-    /// When the provider said the window resets.
-    resets_at: Option<String>,
-    observed_at: String,
-    /// What the window holds now, from the report and the usage this service metered since.
-    /// Absent when nothing was metered since a report that still holds, or when nothing
-    /// relates metered usage to the window.
-    prediction: Option<QuotaPredictionOutput>,
-    /// How much of the window one list dollar spends, learned from the windows reported
-    /// over the last four weeks.
-    calibration: Option<QuotaCalibrationOutput>,
-}
-
-impl From<QuotaWindow> for QuotaWindowOutput {
-    fn from(window: QuotaWindow) -> Self {
-        Self {
-            window_key: window.window_key,
-            label: window.label,
-            used_fraction: window.used_fraction,
-            used_value: window.used_value,
-            limit_value: window.limit_value,
-            unit: window.unit,
-            window_seconds: window.window_seconds,
-            resets_at: window.resets_at.map(|at| at.0.to_string()),
-            observed_at: window.observed_at.to_string(),
-            prediction: window.prediction.map(QuotaPredictionOutput::from),
-            calibration: window.calibration.map(QuotaCalibrationOutput::from),
+    async fn reset_cooldowns_inner(
+        &self,
+        input: Json<QuotaCooldownResetInput>,
+    ) -> QuotaRefreshResponse {
+        let Ok(account_id) = input.0.account_id.parse::<Id<Account>>() else {
+            return QuotaRefreshResponse::Missing(Json(message("account was not found")));
+        };
+        let refresh = match crate::quota::cooldown::reset(&self.state, account_id).await {
+            Ok(refresh) => refresh,
+            Err(RefreshRequestError::UnknownAccount) => {
+                return QuotaRefreshResponse::Missing(Json(message("account was not found")));
+            }
+            Err(error @ (RefreshRequestError::NotRefreshable | RefreshRequestError::NotListed)) => {
+                return QuotaRefreshResponse::Invalid(Json(message(&error.to_string())));
+            }
+            Err(error @ RefreshRequestError::Unreachable(_)) => {
+                return QuotaRefreshResponse::Unreachable(Json(message(&error.to_string())));
+            }
+            Err(RefreshRequestError::Database(error)) => {
+                return QuotaRefreshResponse::Failed(Json(failure("reset_cooldowns", &error)));
+            }
+        };
+        match self.everything("reset_cooldowns").await {
+            Ok(list) => QuotaRefreshResponse::Refreshed(Json(QuotaRefresh {
+                refreshed: refresh.refreshed,
+                failed: refresh.failed,
+                source_failures: refresh.unreachable.into_iter().map(Into::into).collect(),
+                shared_actions: refresh.shared_actions,
+                accounts: list.accounts,
+            })),
+            Err(error) => QuotaRefreshResponse::Failed(Json(error)),
         }
     }
-}
-
-#[derive(Debug, Object)]
-#[oai(rename = "QuotaPrediction", skip_serializing_if_is_none)]
-pub struct QuotaPredictionOutput {
-    /// Share of the window used by now, 0 to 1.
-    used_fraction: f64,
-    /// When the window that holds now resets. Absent for a window that opens on its next
-    /// request and has had none since it reset.
-    resets_at: Option<String>,
-    /// The window reset after the report, so the report no longer describes it.
-    has_reset: bool,
-}
-
-impl From<Prediction> for QuotaPredictionOutput {
-    fn from(prediction: Prediction) -> Self {
-        Self {
-            used_fraction: prediction.used_fraction,
-            resets_at: prediction.resets_at.map(|at| at.to_string()),
-            has_reset: prediction.has_reset,
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-#[oai(rename = "QuotaCalibration")]
-pub struct QuotaCalibrationOutput {
-    /// The median share of the window one list dollar spent.
-    fraction_per_usd: f64,
-    /// The windows the median was taken over.
-    windows: u32,
-    /// Windows whose share per dollar is off the median by more than a factor of two, such
-    /// as one the provider reset early. Newest first.
-    outliers: Vec<QuotaOutlierOutput>,
-}
-
-impl From<Calibration> for QuotaCalibrationOutput {
-    fn from(calibration: Calibration) -> Self {
-        Self {
-            fraction_per_usd: calibration.fraction_per_usd,
-            windows: u32::try_from(calibration.windows).unwrap_or(u32::MAX),
-            outliers: calibration
-                .outliers
-                .into_iter()
-                .map(QuotaOutlierOutput::from)
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-#[oai(rename = "QuotaOutlier")]
-pub struct QuotaOutlierOutput {
-    started_at: String,
-    fraction_per_usd: f64,
-}
-
-impl From<Outlier> for QuotaOutlierOutput {
-    fn from(outlier: Outlier) -> Self {
-        Self {
-            started_at: outlier.started_at.to_string(),
-            fraction_per_usd: outlier.fraction_per_usd,
-        }
-    }
-}
-
-/// A CLIProxy cooldown timer on the credential or on one of its models.
-#[derive(Debug, Object)]
-#[oai(rename = "Cooldown", skip_serializing_if_is_none)]
-pub struct CooldownOutput {
-    scope: String,
-    model_key: Option<String>,
-    reason: String,
-    retry_at: String,
-    /// Seconds left when CLIProxy was last read.
-    remaining_seconds: i64,
-}
-
-impl From<Cooldown> for CooldownOutput {
-    fn from(cooldown: Cooldown) -> Self {
-        Self {
-            scope: cooldown.scope,
-            model_key: cooldown.model_key,
-            reason: cooldown.reason,
-            retry_at: cooldown.retry_at.to_string(),
-            remaining_seconds: cooldown.remaining_seconds,
-        }
-    }
-}
-
-/// A manual quota reset grant the provider reported, with at least one reset left. A Codex
-/// credit is one reset with no label or total.
-#[derive(Debug, Object)]
-#[oai(rename = "ManualReset", skip_serializing_if_is_none)]
-pub struct ManualResetOutput {
-    /// The provider's name for the grant, such as a promotion.
-    label: Option<String>,
-    /// Resets left in the grant; at least 1.
-    remaining: i64,
-    /// Resets the grant started with, when the provider states it.
-    total: Option<i64>,
-    /// RFC 3339. The grant expires at this time. Absent if the provider gives no expiry date.
-    expires_at: Option<String>,
-    /// Whether the provider's grants can be spent through `POST /quota/reset`. Claude grants
-    /// are listed but cannot be spent here, and a disabled or removed credential is refused.
-    spendable: bool,
-}
-
-impl ManualResetOutput {
-    fn new(grant: Grant, spendable: bool) -> Self {
-        Self {
-            label: grant.label,
-            remaining: grant.remaining,
-            total: grant.total,
-            expires_at: grant.expires_at.map(|at| at.0.to_string()),
-            spendable,
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-#[oai(rename = "QuotaAccount", skip_serializing_if_is_none)]
-pub struct QuotaAccountOutput {
-    account: AccountSummaryOutput,
-    status: Option<String>,
-    status_message: Option<String>,
-    disabled: bool,
-    unavailable: bool,
-    /// CLIProxy's scheduling decision: the instant before which CLIProxy will not route
-    /// requests to this credential. It is not the provider's quota reset time; that is
-    /// `resets_at` on a window.
-    next_retry_after: Option<String>,
-    cooldowns: Vec<CooldownOutput>,
-    account_type: Option<String>,
-    plan: Option<String>,
-    /// When CLIProxy's credential list last described this credential.
-    soft_observed_at: Option<String>,
-    /// When a hard refresh last ran for this credential, successful or not.
-    hard_refreshed_at: Option<String>,
-    /// Why the last hard refresh failed; absent after a successful one.
-    hard_refresh_error: Option<String>,
-    /// An explicit 401 expired-token answer. A later successful quota read clears it; the
-    /// service rereads credentials in this state after each sync. CLIProxy credentials it no
-    /// longer lists keep it, so check `removed_at`. Read again after `account.changed`; window
-    /// ages remain in `windows[].observed_at`.
-    sign_in_error: Option<SignInError>,
-    /// Absent unless sign-in expired and this provider has a verified management UI action.
-    reauthentication: Option<Reauthentication>,
-    /// Whether the provider has an adapter and the credential carries what it needs.
-    hard_refreshable: bool,
-    /// When CLIProxy's credential list first left the credential out. Present while CLIProxy
-    /// no longer lists it.
-    removed_at: Option<String>,
-    /// When the last request charged to the credential happened.
-    last_used_at: Option<String>,
-    windows: Vec<QuotaWindowOutput>,
-    /// Every manual reset grant that has not expired, soonest expiry first. Grants with no
-    /// expiry date come last. Empty if the provider grants none or its list is not known, and
-    /// after a reset is spent until a hard refresh reads the list from the provider again.
-    manual_resets: Vec<ManualResetOutput>,
-}
-
-impl From<QuotaAccount> for QuotaAccountOutput {
-    fn from(account: QuotaAccount) -> Self {
-        let spendable = account.spends_manual_resets();
-        Self {
-            account: account.account.into(),
-            status: account.status,
-            status_message: account.status_message,
-            disabled: account.disabled,
-            unavailable: account.unavailable,
-            next_retry_after: account.next_retry_after.map(|at| at.0.to_string()),
-            cooldowns: account.cooldowns.0.into_iter().map(Into::into).collect(),
-            account_type: account.account_type,
-            plan: account.plan,
-            soft_observed_at: account.soft_observed_at.map(|at| at.0.to_string()),
-            hard_refreshed_at: account.hard_refreshed_at.map(|at| at.0.to_string()),
-            hard_refresh_error: account.hard_refresh_error,
-            sign_in_error: account.sign_in_error,
-            reauthentication: account.reauthentication,
-            hard_refreshable: account.hard_refreshable,
-            removed_at: account.removed_at.map(|at| at.0.to_string()),
-            last_used_at: account.last_used_at.map(|at| at.0.to_string()),
-            windows: account.windows.into_iter().map(Into::into).collect(),
-            manual_resets: account
-                .manual_resets
-                .into_iter()
-                .map(|grant| ManualResetOutput::new(grant, spendable))
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-pub struct QuotaList {
-    accounts: Vec<QuotaAccountOutput>,
-}
-
-impl From<Vec<QuotaAccount>> for QuotaList {
-    fn from(accounts: Vec<QuotaAccount>) -> Self {
-        Self {
-            accounts: accounts.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Object)]
-pub struct QuotaRefresh {
-    refreshed: i64,
-    failed: i64,
-    accounts: Vec<QuotaAccountOutput>,
-}
-
-#[derive(Debug, Object)]
-pub struct QuotaSyncInput {
-    source_id: Option<String>,
-}
-
-#[derive(Debug, Object)]
-pub struct QuotaRefreshInput {
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Object)]
-pub struct QuotaResetInput {
-    account_id: String,
-    /// Must be true: the reset is spent at the provider and cannot be taken back.
-    confirmed: bool,
-}
-
-#[derive(ApiResponse)]
-enum QuotaListResponse {
-    #[oai(status = 200)]
-    Found(Json<QuotaList>),
-    #[oai(status = 400)]
-    Invalid(Json<Error>),
-    #[oai(status = 500)]
-    Failed(Json<Error>),
-}
-
-#[derive(ApiResponse)]
-enum QuotaSyncResponse {
-    #[oai(status = 200)]
-    Synced(Json<QuotaList>),
-    #[oai(status = 400)]
-    Invalid(Json<Error>),
-    #[oai(status = 404)]
-    Missing(Json<Error>),
-    #[oai(status = 502)]
-    Unreachable(Json<Error>),
-    #[oai(status = 500)]
-    Failed(Json<Error>),
-}
-
-#[derive(ApiResponse)]
-enum QuotaRefreshResponse {
-    #[oai(status = 200)]
-    Refreshed(Json<QuotaRefresh>),
-    #[oai(status = 400)]
-    Invalid(Json<Error>),
-    #[oai(status = 404)]
-    Missing(Json<Error>),
-    #[oai(status = 502)]
-    Unreachable(Json<Error>),
-    #[oai(status = 500)]
-    Failed(Json<Error>),
 }
 
 fn message(text: &str) -> Error {

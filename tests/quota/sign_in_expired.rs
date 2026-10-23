@@ -3,7 +3,7 @@ use metered_usage::source::Source;
 use poem::test::TestClient;
 use serde_json::{Value, json};
 
-use super::{Calls, accounts_of, by_provider, service, stored_text};
+use super::{Calls, accounts_of, by_provider, expire_actions, service, stored_text};
 
 const EXPIRED: &str = "OAuth access token has expired. Re-authenticate to continue.";
 
@@ -65,6 +65,7 @@ async fn expired_sign_in_keeps_reported_quota_until_a_successful_read() {
             "type": "error", "error": { "type": "authentication_error", "message": EXPIRED }
         }),
     ));
+    expire_actions(&state).await;
     let expired = refresh_one(&client, account_id).await;
     assert_eq!(expired["failed"], 1);
     let claude = by_provider(&expired, "claude");
@@ -97,6 +98,7 @@ async fn expired_sign_in_keeps_reported_quota_until_a_successful_read() {
     );
 
     // Neither a fresh credential listing nor a different failed read proves recovery.
+    expire_actions(&state).await;
     client
         .post("/api/quota/sync")
         .body_json(&json!({}))
@@ -105,16 +107,18 @@ async fn expired_sign_in_keeps_reported_quota_until_a_successful_read() {
         .assert_status_is_ok();
     *calls.claude_response.lock().expect("response") =
         Some((503, json!({ "error": "overloaded" })));
-    metered_usage::quota::recheck_expired(&state).await;
+    expire_actions(&state).await;
+    refresh_one(&client, account_id).await;
     assert_eq!(
         by_provider(&refresh_one(&client, account_id).await, "claude")["sign_in_error"],
         "expired"
     );
 
-    // The next check after a new sign-in clears it with nobody pressing refresh.
+    // A human refresh after signing in again clears the expired state.
     *calls.claude_response.lock().expect("response") = None;
     let before = cursor(&client).await;
-    metered_usage::quota::recheck_expired(&state).await;
+    expire_actions(&state).await;
+    refresh_one(&client, account_id).await;
     let quota = client
         .get("/api/quota")
         .send()
@@ -143,7 +147,7 @@ async fn expired_sign_in_keeps_reported_quota_until_a_successful_read() {
 #[tokio::test]
 async fn a_plain_text_expired_token_answer_is_the_same_state() {
     let calls = Calls::default();
-    let (client, _state) = service(&calls).await.expect("service");
+    let (client, state) = service(&calls).await.expect("service");
     let synced = client
         .post("/api/quota/sync")
         .body_json(&json!({}))
@@ -153,14 +157,14 @@ async fn a_plain_text_expired_token_answer_is_the_same_state() {
     let quota = synced.json().await.value().deserialize::<Value>();
     let account_id = &by_provider(&quota, "claude")["account"]["account_id"];
     *calls.claude_response.lock().expect("response") = Some((401, json!(EXPIRED)));
+    expire_actions(&state).await;
     let expired = refresh_one(&client, account_id).await;
     assert_eq!(by_provider(&expired, "claude")["sign_in_error"], "expired");
 }
 
-/// A credential turned off in CLIProxy cannot be refreshed, so the recheck leaves it alone
-/// and only touches the one whose sign-in expired.
+/// A credential turned off in CLIProxy cannot be refreshed.
 #[tokio::test]
-async fn the_recheck_reads_only_enabled_credentials_whose_sign_in_expired() {
+async fn refresh_reads_only_enabled_credentials() {
     let calls = Calls::default();
     let (client, state) = service(&calls).await.expect("service");
     let refreshed = client
@@ -172,10 +176,12 @@ async fn the_recheck_reads_only_enabled_credentials_whose_sign_in_expired() {
     let quota = refreshed.json().await.value().deserialize::<Value>();
     let account_id = &by_provider(&quota, "claude")["account"]["account_id"];
     *calls.claude_response.lock().expect("response") = Some((401, json!(EXPIRED)));
+    expire_actions(&state).await;
     refresh_one(&client, account_id).await;
     *calls.claude_response.lock().expect("response") = None;
 
     calls.disable(&["a1"]);
+    expire_actions(&state).await;
     client
         .post("/api/quota/sync")
         .body_json(&json!({}))
@@ -183,7 +189,13 @@ async fn the_recheck_reads_only_enabled_credentials_whose_sign_in_expired() {
         .await
         .assert_status_is_ok();
     let sent = calls.all().len();
-    metered_usage::quota::recheck_expired(&state).await;
+    expire_actions(&state).await;
+    client
+        .post("/api/quota/refresh")
+        .body_json(&json!({"account_id":account_id}))
+        .send()
+        .await
+        .assert_status(poem::http::StatusCode::BAD_REQUEST);
     assert_eq!(calls.all().len(), sent, "a turned-off credential was read");
     let still = accounts_of(&client).await;
     assert_eq!(
@@ -192,7 +204,8 @@ async fn the_recheck_reads_only_enabled_credentials_whose_sign_in_expired() {
     );
 
     calls.disable(&[]);
-    // The timer syncs before it rechecks, which is what marks the credential refreshable again.
+    expire_actions(&state).await;
+    // Sync marks the signed-in credential refreshable again.
     client
         .post("/api/quota/sync")
         .body_json(&json!({}))
@@ -200,7 +213,8 @@ async fn the_recheck_reads_only_enabled_credentials_whose_sign_in_expired() {
         .await
         .assert_status_is_ok();
     let sent = calls.all().len();
-    metered_usage::quota::recheck_expired(&state).await;
+    expire_actions(&state).await;
+    refresh_one(&client, account_id).await;
     let reads = calls.all()[sent..]
         .iter()
         .filter(|call| call["url"] == "https://api.anthropic.com/api/oauth/usage")
@@ -228,6 +242,7 @@ fn by_provider_account<'a>(accounts: &'a Value, account_id: &Value) -> &'a Value
 async fn other_failures_do_not_claim_expiry_and_error_bodies_are_not_stored() {
     let calls = Calls::default();
     let (client, state) = service(&calls).await.expect("service");
+    expire_actions(&state).await;
     client
         .post("/api/quota/sync")
         .body_json(&json!({}))
@@ -255,6 +270,7 @@ async fn other_failures_do_not_claim_expiry_and_error_bodies_are_not_stored() {
         ),
     ] {
         *calls.claude_response.lock().expect("response") = Some((status, body));
+        expire_actions(&state).await;
         let failed = refresh_one(&client, account_id).await;
         let claude = by_provider(&failed, "claude");
         assert!(claude.get("sign_in_error").is_none(), "{failed}");

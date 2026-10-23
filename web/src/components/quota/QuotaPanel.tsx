@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, Errored, For, Loading, onCleanu
 
 import type { QuotaAccount } from "../../api/quota";
 import { fetchQuota, refreshQuota, syncQuota } from "../../api/quota";
+import { createQuotaChanges } from "../../api/quotaChanges";
 import { createUsageStream } from "../../api/usageStream";
 import { groupBySource, isRemoved } from "../../domain/account";
 import { redact } from "../../domain/privacy";
@@ -56,8 +57,7 @@ export const QuotaPanel = () => {
     .toSorted(byLastUse));
   const hasRefreshable = createMemo(() => current().some(entry => entry.hard_refreshable));
   // Every listing stamps the retired credentials it still names too, so they date the last sync.
-  // An expired sign-in is rechecked on its own, so its attempts do not date the panel's refresh,
-  // unless every credential is expired and they are the only refreshes there are.
+  // Keep failed expired-sign-in reads from dating the successful provider observations.
   const latest = createMemo((): Latest => ({
     soft: latestMoment(accounts().map(entry => entry.soft_observed_at)),
     hard: latestMoment(current()
@@ -124,8 +124,8 @@ export const QuotaPanel = () => {
     }
 
     setNotice({
-      tone: result.value.failed > 0 ? "error" : "info",
-      text: `Refreshed ${result.value.refreshed} from providers, ${result.value.failed} failed.`,
+      tone: (result.value.failed > 0 || result.value.source_failures.length > 0) ? "error" : "info",
+      text: `Refreshed ${result.value.refreshed} from providers, ${result.value.failed} failed, ${result.value.source_failures.length} sources unreachable.`,
     });
     setAccounts(result.value.accounts);
   };
@@ -145,6 +145,8 @@ export const QuotaPanel = () => {
       refresh(health);
     }, STREAM_REREAD_DELAY_MS);
   };
+
+  createQuotaChanges(scheduleStreamReread);
 
   createUsageStream({
     onUsage: (event) => {

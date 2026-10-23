@@ -2,18 +2,20 @@
 //!
 //! A soft sync reads CLIProxy's own credential list, which reaches no provider, and runs on
 //! a timer. A hard refresh asks each provider through CLIProxy's `api-call`, exactly as the
-//! official management UI does, and runs when asked, and on that timer for a credential
-//! whose sign-in expired, so a new sign-in clears the state without anyone pressing refresh.
+//! official management UI does. Automatic provider recovery is disabled here; gateway
+//! credential-list sync never calls a provider.
 //! CLIProxy keeps nothing of a hard refresh, so the windows stored here are the only record
 //! of it.
 
 pub mod calibration;
+pub mod cooldown;
 pub mod credential;
 pub mod management;
 pub mod manual_reset;
 pub mod prediction;
 pub mod provider;
 pub mod response;
+pub mod reuse;
 pub mod sign_in;
 pub mod window;
 
@@ -35,7 +37,6 @@ use crate::quota::credential::QuotaAccount;
 use crate::quota::management::{AuthFile, AuthFiles, Management, ManagementError};
 use crate::quota::manual_reset::Credit;
 use crate::quota::provider::{Provider, RefreshError};
-use crate::quota::sign_in::SignIn;
 use crate::quota::window::QuotaWindow;
 use crate::source::{Source, SourceKind};
 
@@ -70,6 +71,7 @@ pub struct SourceFailure {
 pub struct Refresh {
     pub refreshed: i64,
     pub failed: i64,
+    pub shared_actions: Vec<reuse::SharedQuotaAction>,
     pub unreachable: Vec<SourceFailure>,
 }
 
@@ -83,12 +85,14 @@ pub enum RefreshRequestError {
         "the account cannot be hard refreshed: no adapter, or its credential lacks what the adapter needs"
     )]
     NotRefreshable,
+    #[error("no enabled CLIProxy source lists an enabled credential for this account")]
+    NotListed,
     #[error("source {}: {}", .0.source, .0.error)]
     Unreachable(SourceFailure),
 }
 
-/// Soft syncs every CLIProxy source now and then every [`SOFT_SYNC_INTERVAL`], and after each
-/// one hard refreshes only the credentials whose sign-in expired.
+/// Soft syncs gateway credential lists now and every [`SOFT_SYNC_INTERVAL`].
+/// Automatic provider recovery is disabled; provider requests require a human.
 pub fn spawn(state: Arc<AppState>) {
     response::spawn(Arc::clone(&state));
     tokio::spawn(async move {
@@ -97,26 +101,8 @@ pub fn spawn(state: Arc<AppState>) {
         loop {
             interval.tick().await;
             sync_logged(&state, None).await;
-            recheck_expired(&state).await;
         }
     });
-}
-
-/// Hard refreshes each credential whose sign-in expired, one provider call each, until a
-/// read succeeds and clears the state. Failures are logged.
-pub async fn recheck_expired(state: &AppState) {
-    let accounts = match SignIn::expired(&state.database).await {
-        Ok(accounts) => accounts,
-        Err(error) => {
-            tracing::error!(%error, "expired sign-ins could not be listed");
-            return;
-        }
-    };
-    for account_id in accounts {
-        if let Err(error) = refresh(state, &state.http, Some(account_id)).await {
-            tracing::warn!(%account_id, %error, "recheck of an expired sign-in failed");
-        }
-    }
 }
 
 /// [`sync`] for a caller that has no one to answer, so failures are logged.
@@ -162,6 +148,7 @@ pub async fn refresh(
     client: &Client,
     only: Option<Id<Account>>,
 ) -> Result<Refresh, RefreshRequestError> {
+    let requested_at = Timestamp::now();
     let source_id = match only {
         Some(id) => Some(
             Account::load(&state.database, id)
@@ -198,10 +185,26 @@ pub async fn refresh(
             .filter_map(|(account_id, file, provider)| Some((account_id, file, provider?)))
             .collect::<Vec<_>>();
         found |= !targets.is_empty();
+        let mut fresh = Vec::new();
+        for (account_id, file, provider) in targets {
+            if let Some(reused) =
+                reuse::Reuse::recent(&state.database, "hard_refresh", account_id, requested_at)
+                    .await?
+            {
+                if reused.failed {
+                    outcome.failed += 1;
+                } else {
+                    outcome.refreshed += 1;
+                }
+                outcome.shared_actions.push(reused.action);
+            } else {
+                fresh.push((account_id, file, provider));
+            }
+        }
         let management = &management;
         // Built before they are streamed: futures made inside a stream combinator's
         // closure lose their lifetimes and the handler's future stops being `Send`.
-        let fetches = targets
+        let fetches = fresh
             .into_iter()
             .map(|(account_id, file, provider)| async move {
                 let auth_index = file.entry.auth_index.as_deref().unwrap_or_default();
@@ -209,12 +212,9 @@ pub async fn refresh(
                 (account_id, result, Timestamp::now())
             })
             .collect::<Vec<_>>();
-        let results = stream::iter(fetches)
-            .buffer_unordered(HARD_REFRESH_CONCURRENCY)
-            .collect::<Vec<_>>()
-            .await;
-        for (account_id, result, at) in results {
-            record(state, account_id, &result, at).await?;
+        let mut results = stream::iter(fetches).buffer_unordered(HARD_REFRESH_CONCURRENCY);
+        while let Some((account_id, result, at)) = results.next().await {
+            record(state, account_id, &result, at, true).await?;
             match result {
                 Ok(_) => outcome.refreshed += 1,
                 Err(error) => {
@@ -329,6 +329,7 @@ async fn record(
     account_id: Id<Account>,
     result: &Result<provider::Observation, RefreshError>,
     at: Timestamp,
+    reconcile_resets: bool,
 ) -> Result<(), DatabaseError> {
     let mut transaction = state.database.write().await?;
     let snapshot = Snapshot::quota(&mut transaction, Scope::Account(account_id)).await?;
@@ -337,6 +338,12 @@ async fn record(
             QuotaWindow::replace(&mut transaction, account_id, &observation.windows, at).await?;
             if let provider::ManualResets::Reported(grants) = &observation.manual_resets {
                 Credit::replace(&mut transaction, account_id, grants).await?;
+                // A human refresh has now obtained the provider's authoritative grant list.
+                // Reconcile interrupted resets without ever issuing another consume here.
+                if reconcile_resets {
+                    sqlx::query("UPDATE quota_action SET finished_at = ?, outcome = 'reconciled_unknown', shared = 0 WHERE kind = 'quota_reset' AND account_id = ? AND finished_at IS NULL")
+                    .bind(at.to_string()).bind(account_id.encode()).execute(&mut *transaction).await?;
+                }
             }
             QuotaAccount::refreshed(
                 &mut transaction,

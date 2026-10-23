@@ -4,7 +4,7 @@ import { createEffect, createMemo, createSignal, For, Match, Show, Switch, untra
 
 import type { AccountHealthStrip } from "../../api/accountHealth";
 import type { QuotaAccount, QuotaRefresh } from "../../api/quota";
-import { refreshQuota } from "../../api/quota";
+import { refreshQuota, resetCooldowns } from "../../api/quota";
 import { accountDescription, accountLabel, isUnlabelled, planLabel } from "../../domain/account";
 import { formatMoment } from "../../domain/format";
 import { redact } from "../../domain/privacy";
@@ -69,6 +69,7 @@ export const QuotaCard = (properties: {
 }) => {
   const [isRefreshing, setIsRefreshing] = createSignal(false);
   const [isResetting, setIsResetting] = createSignal(false);
+  const [isClearingCooldowns, setIsClearingCooldowns] = createSignal(false);
   const [failure, setFailure] = createSignal<string | undefined>();
   const isSoftBehind = createMemo(() => isBehind(properties.entry.soft_observed_at, properties.latestSoft));
   // An expired sign-in's failed attempts are said by the sign-in notice, not as a refresh age.
@@ -133,6 +134,23 @@ export const QuotaCard = (properties: {
     properties.onAccounts(result.value.accounts);
   };
 
+  const clearCooldowns = async (): Promise<void> => {
+    setIsClearingCooldowns(true);
+
+    const result = await resetCooldowns(properties.entry.account.account_id);
+
+    setIsClearingCooldowns(false);
+
+    if (!result.ok) {
+      setFailure(result.message);
+
+      return;
+    }
+
+    setFailure(result.value.failed > 0 ? "CLIProxy did not confirm the cooldown reset." : undefined);
+    properties.onAccounts(result.value.accounts);
+  };
+
   return (
     <li
       ref={(element) => {
@@ -171,7 +189,7 @@ export const QuotaCard = (properties: {
                 label={`Refresh ${accountLabel(properties.entry.account)} from the provider`}
                 tooltip={isRefreshing() ? "Refreshing from the provider" : "Refresh from the provider"}
                 isPending={isRefreshing()}
-                isDisabled={isRefreshing() || isResetting() || properties.isRefreshBlocked}
+                isDisabled={isRefreshing() || isResetting() || isClearingCooldowns() || properties.isRefreshBlocked}
                 onClick={() => void refresh()}
               >
                 <TbOutlineRefresh size={16} />
@@ -221,7 +239,7 @@ export const QuotaCard = (properties: {
           <p class="font-semibold text-amber-700 dark:text-amber-400">Sign-in expired</p>
           <Show
             when={properties.entry.reauthentication}
-            fallback={<p class="text-xs text-slate-600 dark:text-slate-400">{`Sign in to this account again in CLIProxy.${properties.entry.hard_refreshable ? " Then refresh this card, or wait a few minutes." : ""}`}</p>}
+            fallback={<p class="text-xs text-slate-600 dark:text-slate-400">{`Sign in to this account again in CLIProxy.${properties.entry.hard_refreshable ? " Then refresh this card." : ""}`}</p>}
           >
             {reauthentication => (
               <>
@@ -234,7 +252,7 @@ export const QuotaCard = (properties: {
                   Sign in again in CLIProxy
                 </a>
                 <p class="text-xs wrap-break-word text-slate-600 dark:text-slate-400">
-                  {`Press ${reauthentication().button}.${properties.entry.hard_refreshable ? " Then refresh this card, or wait a few minutes." : ""}`}
+                  {`Press ${reauthentication().button}.${properties.entry.hard_refreshable ? " Then refresh this card." : ""}`}
                 </p>
               </>
             )}
@@ -341,6 +359,17 @@ export const QuotaCard = (properties: {
             <dd>{formatAge(properties.entry.hard_refreshed_at, properties.nowMs)}</dd>
           </Show>
         </dl>
+      </Show>
+      <Show when={!properties.entry.disabled && properties.entry.removed_at === undefined && properties.entry.cooldowns.length > 0}>
+        <button
+          type="button"
+          class="self-start rounded-control px-2 py-1 text-xs text-slate-600 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50 dark:text-slate-400 dark:hover:bg-slate-800"
+          disabled={isResetting() || isClearingCooldowns() || isRefreshing() || properties.isRefreshBlocked}
+          onClick={() => void clearCooldowns()}
+          title="Clear CLIProxy scheduling cooldowns. Provider quota stays unchanged."
+        >
+          {isClearingCooldowns() ? "Resetting cooldowns..." : "Reset cooldowns"}
+        </button>
       </Show>
       <Show when={isSignInExpired() ? undefined : properties.entry.hard_refresh_error}>
         {error => <p class="text-xs wrap-break-word text-red-600 dark:text-red-400">{`Hard refresh failed: ${error()}`}</p>}

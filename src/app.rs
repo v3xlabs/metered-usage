@@ -19,6 +19,10 @@ pub struct AppState {
     pub usage: broadcast::Sender<UsageUpdate>,
     /// Shared by every outbound call so connections are pooled.
     pub http: reqwest::Client,
+    /// Soft sync, cooldown and provider-action families have separate claim locks.
+    /// Provider refresh and reset share a family to serialize spending and its observation.
+    pub quota_action_locks: [Mutex<()>; 3],
+    pub quota_action_owners: crate::http::quota_action_owner::ActionOwners,
     pub manual_reset_lock: Mutex<()>,
 }
 
@@ -36,6 +40,8 @@ impl AppState {
             config,
             usage: broadcast::channel(USAGE_BACKLOG).0,
             http: reqwest::Client::builder().build()?,
+            quota_action_locks: std::array::from_fn(|_| Mutex::new(())),
+            quota_action_owners: crate::http::quota_action_owner::ActionOwners::default(),
             manual_reset_lock: Mutex::new(()),
         })
     }

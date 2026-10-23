@@ -39,6 +39,7 @@ pub enum ChangeKind {
     PlanChanged,
     UsageUpdated,
     RequestArrived,
+    QuotaAction,
 }
 
 /// What changed, or which account received a request.
@@ -61,6 +62,8 @@ pub enum Subject {
     Plan(Id<Plan>),
     /// Usage counts or stored costs changed. Read the summary and leverage again.
     Usage,
+    /// A human quota action started or finished. Read /quota/actions.
+    QuotaAction,
     /// One newly accepted request. The change cursor identifies its arrival.
     Arrival {
         account_id: Id<Account>,
@@ -115,21 +118,23 @@ struct StoredChange {
 impl ChangeKind {
     /// What a read without `kinds` answers: every kind but `request.arrived`, which has one
     /// change per request and is answered only when `kinds` names it.
-    pub const DEFAULT: [Self; 6] = [
+    pub const DEFAULT: [Self; 7] = [
         Self::QuotaUpdated,
         Self::ResetUpdated,
         Self::PriceChanged,
         Self::AccountChanged,
         Self::PlanChanged,
         Self::UsageUpdated,
+        Self::QuotaAction,
     ];
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::QuotaUpdated,
         Self::ResetUpdated,
         Self::PriceChanged,
         Self::AccountChanged,
         Self::PlanChanged,
         Self::UsageUpdated,
+        Self::QuotaAction,
         Self::RequestArrived,
     ];
 
@@ -143,6 +148,7 @@ impl ChangeKind {
             Self::PlanChanged => "plan.changed",
             Self::UsageUpdated => "usage.updated",
             Self::RequestArrived => "request.arrived",
+            Self::QuotaAction => "quota.action",
         }
     }
 }
@@ -174,6 +180,7 @@ impl Subject {
             Self::Price { .. } => ChangeKind::PriceChanged,
             Self::Plan(_) => ChangeKind::PlanChanged,
             Self::Usage => ChangeKind::UsageUpdated,
+            Self::QuotaAction => ChangeKind::QuotaAction,
             Self::Arrival { .. } => ChangeKind::RequestArrived,
         }
     }
@@ -198,7 +205,7 @@ impl Change {
             ),
             Subject::Price { model } => (None, None, Some(model.as_str()), None, None),
             Subject::Plan(plan_id) => (None, None, None, Some(*plan_id), None),
-            Subject::Usage => (None, None, None, None, None),
+            Subject::Usage | Subject::QuotaAction => (None, None, None, None, None),
             Subject::Arrival { account_id, failed } => {
                 (Some(*account_id), None, None, None, Some(*failed))
             }
@@ -374,6 +381,7 @@ impl TryFrom<StoredChange> for Change {
                 Subject::Plan(plan_id)
             }
             (ChangeKind::UsageUpdated, None, None, None, None, None) => Subject::Usage,
+            (ChangeKind::QuotaAction, None, None, None, None, None) => Subject::QuotaAction,
             (ChangeKind::RequestArrived, Some(account_id), None, None, None, Some(failed)) => {
                 Subject::Arrival { account_id, failed }
             }

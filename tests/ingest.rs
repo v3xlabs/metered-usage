@@ -846,6 +846,7 @@ async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_accou
     let admitted = [
         ("/events", ""),
         ("/quota", ""),
+        ("/quota/actions", ""),
         ("/prices", "?model=claude-sonnet-4"),
         ("/accounts", ""),
         (
