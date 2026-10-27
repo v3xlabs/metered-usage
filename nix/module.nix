@@ -32,8 +32,8 @@ in {
         API, the MCP endpoint and the web UI, and every variable a source names in `key_env`.
         It may set METERED_USAGE_READ_TOKEN, a second token that admits only GET requests
         under /api, for a dashboard such as Grafana, and METERED_USAGE_CONSUMER_TOKEN, a third
-        that admits only GET /api/events, /api/quota, /api/prices and /api/accounts, for a
-        service that follows quota and prices, such as Kettle Code.
+        that admits only the GETs a service such as Kettle Code follows quota, prices, usage
+        and plans with, and POST /api/quota/sync and /api/quota/refresh, never a reset.
       '';
     };
 

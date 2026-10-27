@@ -1,8 +1,8 @@
 //! One shared token guards everything that reads or writes usage. A client presents it as
 //! a bearer token, or as the session cookie a browser was given for it. Two optional tokens
-//! read less: one every `GET`, for a dashboard, and one only what another service needs to
+//! reach less: one every `GET`, for a dashboard, and one only what another service needs to
 //! follow quota, resets, prices, accounts, usage summaries, plans, account health and
-//! request arrivals.
+//! request arrivals, and to refresh quota.
 
 use std::sync::Arc;
 
@@ -34,6 +34,12 @@ const CONSUMER_READS: [&str; 9] = [
     "/analytics/health",
 ];
 
+/// Operations under [`crate::http::MOUNT`] the consumer token reaches besides its reads, all
+/// `POST`: a soft sync and a hard refresh. A hard refresh can spend quota, through xAI's paid
+/// probe and Meta's key call, so a consumer sends one only for a person's click. The resets
+/// spend a provider's grant or clear CLIProxy's cooldowns, so they stay with the token.
+const CONSUMER_ACTIONS: [&str; 2] = ["/quota/sync", "/quota/refresh"];
+
 /// The tokens the API admits, each to its own operations.
 #[derive(Clone)]
 pub struct Credentials {
@@ -41,18 +47,27 @@ pub struct Credentials {
     pub token: Token,
     /// Admits every `GET`, for a dashboard such as Grafana.
     pub read_token: Option<Token>,
-    /// Admits only the `GET`s of [`CONSUMER_READS`], for a service such as Kettle Code that
-    /// follows quota, prices, aggregate usage, plans, account health counts and request
-    /// arrivals, but cannot read request records.
+    /// Admits only the `GET`s of [`CONSUMER_READS`] and the `POST`s of [`CONSUMER_ACTIONS`],
+    /// for a service such as Kettle Code that follows quota, prices, aggregate usage, plans,
+    /// account health counts and request arrivals and refreshes quota, but cannot read
+    /// request records.
     pub consumer_token: Option<Token>,
+}
+
+/// Which of the [`Credentials`] admitted a request.
+#[derive(Clone, Copy)]
+enum Role {
+    Admin,
+    Read,
+    Consumer,
 }
 
 /// Credential role and transport, never a password-derived fingerprint. An app
 /// label identifies a claimed client; this identifies the authority that admitted it.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct CredentialIdentity {
-    pub credential_id: String,
-    pub transport: String,
+    pub credential_id: &'static str,
+    pub transport: &'static str,
 }
 
 #[derive(Clone)]
@@ -78,13 +93,14 @@ impl Token {
         std::hint::black_box(difference) == 0
     }
 
+    /// How the request presents this token: `bearer` or `session`.
     #[must_use]
-    pub fn admits(&self, request: &Request) -> bool {
+    pub fn presented(&self, request: &Request) -> Option<&'static str> {
         let bearer = request
             .header(header::AUTHORIZATION)
             .and_then(|value| value.strip_prefix("Bearer "));
         if bearer.is_some_and(|bearer| self.matches(bearer)) {
-            return true;
+            return Some("bearer");
         }
 
         request
@@ -95,6 +111,7 @@ impl Token {
             .flat_map(|value| value.split(';'))
             .filter_map(|pair| pair.trim().split_once('='))
             .any(|(name, value)| name == SESSION_COOKIE && self.matches(value))
+            .then_some("session")
     }
 
     /// The `Set-Cookie` value that makes a browser present this token.
@@ -138,26 +155,51 @@ impl From<Token> for Credentials {
 }
 
 impl Credentials {
-    /// Whether the request may reach its operation. The narrower tokens admit `GET` only,
-    /// so a dashboard or a service that holds one cannot change prices, plans or
-    /// credentials.
+    /// The credential the request presents for the operation at `method` and `path`, if its
+    /// role reaches that operation.
     #[must_use]
-    pub fn admit(&self, request: &Request) -> bool {
-        if is_open(request) || self.token.admits(request) {
-            return true;
+    pub fn admit(
+        &self,
+        request: &Request,
+        method: &Method,
+        path: &str,
+    ) -> Option<CredentialIdentity> {
+        [
+            (Role::Admin, Some(&self.token)),
+            (Role::Read, self.read_token.as_ref()),
+            (Role::Consumer, self.consumer_token.as_ref()),
+        ]
+        .into_iter()
+        .filter(|(role, _)| role.reaches(method, path))
+        .find_map(|(role, token)| {
+            Some(CredentialIdentity {
+                credential_id: role.credential_id(),
+                transport: token?.presented(request)?,
+            })
+        })
+    }
+}
+
+impl Role {
+    /// The narrower tokens reach no `POST` but the consumer's [`CONSUMER_ACTIONS`], so a
+    /// dashboard or a service that holds one cannot change prices, plans or credentials.
+    fn reaches(self, method: &Method, path: &str) -> bool {
+        match self {
+            Self::Admin => true,
+            Self::Read => method == Method::GET,
+            Self::Consumer => {
+                (method == Method::GET && CONSUMER_READS.contains(&path))
+                    || (method == Method::POST && CONSUMER_ACTIONS.contains(&path))
+            }
         }
-        if request.method() != Method::GET {
-            return false;
+    }
+
+    const fn credential_id(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Read => "read",
+            Self::Consumer => "consumer",
         }
-        let path = request.uri().path();
-        self.read_token
-            .as_ref()
-            .is_some_and(|token| token.admits(request))
-            || (CONSUMER_READS.contains(&path)
-                && self
-                    .consumer_token
-                    .as_ref()
-                    .is_some_and(|token| token.admits(request)))
     }
 }
 
@@ -186,30 +228,21 @@ impl<E: Endpoint> Endpoint for RequireCredentialEndpoint<E> {
     type Output = Response;
 
     async fn call(&self, mut request: Request) -> poem::Result<Self::Output> {
-        if self.credentials.admit(&request) {
-            if self.credentials.token.admits(&request) {
-                let identity = CredentialIdentity {
-                    credential_id: "admin".to_owned(),
-                    transport: if request
-                        .header(header::AUTHORIZATION)
-                        .and_then(|v| v.strip_prefix("Bearer "))
-                        .is_some_and(|v| self.credentials.token.matches(v))
-                    {
-                        "bearer"
-                    } else {
-                        "session"
-                    }
-                    .to_owned(),
-                };
-                request.extensions_mut().insert(identity);
-            }
+        if is_open(&request) {
             return Ok(self.inner.call(request).await?.into_response());
         }
+        let Some(identity) =
+            self.credentials
+                .admit(&request, request.method(), request.uri().path())
+        else {
+            return Ok(Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .content_type("application/json")
+                .body(serde_json::json!({ "message": "a credential is required" }).to_string()));
+        };
+        request.extensions_mut().insert(identity);
 
-        Ok(Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .content_type("application/json")
-            .body(serde_json::json!({ "message": "a credential is required" }).to_string()))
+        Ok(self.inner.call(request).await?.into_response())
     }
 }
 

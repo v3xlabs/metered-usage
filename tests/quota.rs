@@ -8,7 +8,7 @@ use metered_usage::app::AppState;
 use metered_usage::config::Config;
 use metered_usage::database::Database;
 use metered_usage::database::codec::StoredTimestamp;
-use metered_usage::http::auth::Token;
+use metered_usage::http::auth::{Credentials, Token};
 use metered_usage::source::Source;
 use poem::http::{StatusCode, header};
 use poem::listener::{Acceptor, Listener, TcpListener};
@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 use sqlx::Row;
 
 const TOKEN: &str = "correct horse battery staple";
+const READ_TOKEN: &str = "grafana reads every get";
+const CONSUMER_TOKEN: &str = "kettle code follows quota";
 const MANAGEMENT_KEY: &str = "mgmt-key-7f3a9c1e5b";
 const DCA_TOKEN: &str = "dca:META-DCA-SECRET-4411";
 const META_LLM_KEY: &str = "meta-llm-key-SECRET-9921";
@@ -299,8 +301,12 @@ async fn service(
     )?;
     let database = Database::open("sqlite::memory:", 0).await?;
     Source::sync(&database, &config).await?;
-    let token = Token::try_from(TOKEN.to_owned())?;
-    let state = Arc::new(AppState::new(database, token.into(), config)?);
+    let credentials = Credentials {
+        token: Token::try_from(TOKEN.to_owned())?,
+        read_token: Some(Token::try_from(READ_TOKEN.to_owned())?),
+        consumer_token: Some(Token::try_from(CONSUMER_TOKEN.to_owned())?),
+    };
+    let state = Arc::new(AppState::new(database, credentials, config)?);
     let client = TestClient::new(metered_usage::http::routes(&state))
         .default_header("X-Quota-Client", "test-ui")
         .default_header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
@@ -1014,6 +1020,134 @@ async fn no_secret_reaches_a_response_or_the_database() {
         }
         assert!(!stored.contains(secret), "the database holds {secret}");
     }
+}
+
+#[tokio::test]
+async fn the_consumer_token_refreshes_quota_and_never_resets_it() {
+    let calls = Calls::default();
+    let (admin, state) = service(&calls).await.expect("a service");
+    let client = TestClient::new(metered_usage::http::routes(&state))
+        .default_header("X-Quota-Client", "kettle-code");
+    let consumer = format!("Bearer {CONSUMER_TOKEN}");
+    let read = format!("Bearer {READ_TOKEN}");
+    let listed = |bearer: &str, tag: Option<&str>| {
+        let mut request = client
+            .get("/api/quota")
+            .header(header::AUTHORIZATION, bearer);
+        if let Some(tag) = tag {
+            request = request.header(header::IF_NONE_MATCH, tag);
+        }
+        request.send()
+    };
+    let post = |bearer: &str, path: &str, body: Value| {
+        client
+            .post(path)
+            .header(header::AUTHORIZATION, bearer)
+            .body_json(&body)
+            .send()
+    };
+
+    let advertised = listed(&consumer, None).await;
+    advertised.assert_status_is_ok();
+    let tag = advertised
+        .0
+        .headers()
+        .get(header::ETAG)
+        .and_then(|tag| tag.to_str().ok())
+        .expect("a tag")
+        .to_owned();
+    let advertised = advertised.json().await.value().deserialize::<Value>();
+    assert_eq!(
+        advertised["refresh_permissions"],
+        json!({ "soft": true, "hard": true })
+    );
+    // The same accounts read with the read token are another answer, never a 304.
+    let withheld = listed(&read, Some(&tag)).await;
+    withheld.assert_status_is_ok();
+    let withheld = withheld.json().await.value().deserialize::<Value>();
+    assert_eq!(
+        withheld["refresh_permissions"],
+        json!({ "soft": false, "hard": false })
+    );
+
+    let synced = post(&consumer, "/api/quota/sync", json!({})).await;
+    synced.assert_status_is_ok();
+    let synced = synced.json().await.value().deserialize::<Value>();
+    assert_eq!(synced["accounts"].as_array().expect("accounts").len(), 6);
+    let refreshed = post(&consumer, "/api/quota/refresh", json!({})).await;
+    refreshed.assert_status_is_ok();
+    assert_eq!(
+        refreshed.json().await.value().deserialize::<Value>()["refreshed"],
+        4
+    );
+    let actions = admin
+        .get("/api/quota/actions")
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .deserialize::<Value>();
+    let attributed = actions
+        .as_array()
+        .expect("actions")
+        .iter()
+        .map(|action| (action["kind"].clone(), action["credential_id"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        attributed,
+        [
+            (json!("soft_refresh"), json!("consumer")),
+            (json!("hard_refresh"), json!("consumer")),
+        ]
+    );
+
+    let account_id = by_provider(&synced, "codex")["account"]["account_id"].clone();
+    for (path, body) in [
+        (
+            "/api/quota/reset",
+            json!({ "account_id": account_id, "confirmed": true }),
+        ),
+        (
+            "/api/quota/cooldowns/reset",
+            json!({ "account_id": account_id }),
+        ),
+    ] {
+        post(&consumer, path, body)
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    for path in ["/api/quota/sync", "/api/quota/refresh"] {
+        post(&read, path, json!({}))
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+}
+
+/// A token set as both the read and the consumer token reads every `GET` as the read token,
+/// and its refreshes as the consumer token; the listing advertises what the refreshes admit.
+#[tokio::test]
+async fn a_token_that_is_also_the_read_token_still_advertises_its_refreshes() {
+    let database = Database::open("sqlite::memory:", 0)
+        .await
+        .expect("a database");
+    let shared = Token::try_from(CONSUMER_TOKEN.to_owned()).expect("a token");
+    let credentials = Credentials {
+        token: Token::try_from(TOKEN.to_owned()).expect("a token"),
+        read_token: Some(shared.clone()),
+        consumer_token: Some(shared),
+    };
+    let state =
+        Arc::new(AppState::new(database, credentials, Config::default()).expect("a state"));
+    let client = TestClient::new(metered_usage::http::routes(&state))
+        .default_header(header::AUTHORIZATION, format!("Bearer {CONSUMER_TOKEN}"));
+
+    let listed = client.get("/api/quota").send().await;
+    listed.assert_status_is_ok();
+    assert_eq!(
+        listed.json().await.value().deserialize::<Value>()["refresh_permissions"],
+        json!({ "soft": true, "hard": true })
+    );
 }
 
 // Model distinct human actions or timer ticks outside the minute of result sharing.

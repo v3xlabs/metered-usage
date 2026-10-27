@@ -54,7 +54,7 @@ impl<E: Endpoint> SharedAction<E> {
         let requested_at = Timestamp::now();
         let identity = request
             .data::<CredentialIdentity>()
-            .cloned()
+            .copied()
             .ok_or_else(|| poem::Error::from_status(StatusCode::INTERNAL_SERVER_ERROR))?;
         let label = request
             .headers()
@@ -304,8 +304,8 @@ pub async fn automatic_recovery(state: Arc<AppState>, account_id: Id<Account>) {
         .body(serde_json::json!({"account_id": account_id.encode()}).to_string());
     request.extensions_mut().insert(state);
     request.extensions_mut().insert(CredentialIdentity {
-        credential_id: "internal:automatic-recovery".to_owned(),
-        transport: "internal".to_owned(),
+        credential_id: "internal:automatic-recovery",
+        transport: "internal",
     });
     if let Err(error) = share_hard_refresh(endpoint).call(request).await {
         tracing::error!(%error, %account_id, "automatic recovery failed");

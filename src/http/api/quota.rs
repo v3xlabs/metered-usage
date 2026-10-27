@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use poem::Request;
+use poem::http::Method;
 use poem_openapi::OpenApi;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;
@@ -7,8 +9,9 @@ use poem_openapi::payload::Json;
 use crate::app::AppState;
 use crate::http::api::Error;
 use crate::http::api::quota_output::{
-    QuotaCooldownResetInput, QuotaList, QuotaListResponse, QuotaRefresh, QuotaRefreshInput,
-    QuotaRefreshResponse, QuotaResetInput, QuotaSyncInput, QuotaSyncResponse,
+    QuotaCooldownResetInput, QuotaList, QuotaListResponse, QuotaListing, QuotaRefresh,
+    QuotaRefreshInput, QuotaRefreshPermissions, QuotaRefreshResponse, QuotaResetInput,
+    QuotaSyncInput, QuotaSyncResponse,
 };
 use crate::http::conditional::conditional;
 use crate::http::quota_action::{
@@ -51,7 +54,8 @@ impl QuotaApi {
 
 #[OpenApi]
 impl QuotaApi {
-    /// The last known state and quota of every CLIProxy credential, from the database only.
+    /// The last known state and quota of every CLIProxy credential, from the database only,
+    /// and which of `/quota/sync` and `/quota/refresh` the presented token may call.
     ///
     /// The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
     /// with no body while those bytes are the same. Every soft sync moves
@@ -73,7 +77,11 @@ impl QuotaApi {
             description = "A tag of the answer's bytes, to send back in If-None-Match. Absent on an error."
         )
     )]
-    async fn list_quota(&self, source_id: Query<Option<String>>) -> QuotaListResponse {
+    async fn list_quota(
+        &self,
+        request: &Request,
+        source_id: Query<Option<String>>,
+    ) -> QuotaListResponse {
         let source_id = match source_id.0.as_deref().map(str::parse::<Id<Source>>) {
             None => None,
             Some(Ok(id)) => Some(id),
@@ -82,7 +90,21 @@ impl QuotaApi {
             }
         };
         match QuotaAccount::list(&self.state.database, source_id).await {
-            Ok(accounts) => QuotaListResponse::Found(Json(accounts.into())),
+            Ok(accounts) => QuotaListResponse::Found(Json(QuotaListing {
+                accounts: accounts.into_iter().map(Into::into).collect(),
+                refresh_permissions: QuotaRefreshPermissions {
+                    soft: self
+                        .state
+                        .credentials
+                        .admit(request, &Method::POST, "/quota/sync")
+                        .is_some(),
+                    hard: self
+                        .state
+                        .credentials
+                        .admit(request, &Method::POST, "/quota/refresh")
+                        .is_some(),
+                },
+            })),
             Err(error) => QuotaListResponse::Failed(Json(failure("list_quota", &error))),
         }
     }

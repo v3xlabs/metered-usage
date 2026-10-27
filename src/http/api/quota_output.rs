@@ -261,6 +261,22 @@ impl From<Vec<QuotaAccount>> for QuotaList {
     }
 }
 
+/// The answer of `GET /quota`: every credential, and the refreshes the presented token may
+/// ask for.
+#[derive(Debug, Object)]
+pub struct QuotaListing {
+    pub(super) accounts: Vec<QuotaAccountOutput>,
+    pub(super) refresh_permissions: QuotaRefreshPermissions,
+}
+
+/// Whether the presented token may call `POST /quota/sync` (`soft`) and `POST /quota/refresh`
+/// (`hard`).
+#[derive(Debug, Object)]
+pub struct QuotaRefreshPermissions {
+    pub(super) soft: bool,
+    pub(super) hard: bool,
+}
+
 #[derive(Debug, Object)]
 pub struct QuotaSourceFailure {
     source: String,
@@ -313,7 +329,7 @@ pub struct QuotaResetInput {
 #[derive(ApiResponse)]
 pub(super) enum QuotaListResponse {
     #[oai(status = 200)]
-    Found(Json<QuotaList>),
+    Found(Json<QuotaListing>),
     #[expect(dead_code, reason = "the shared-action transform emits this response")]
     #[oai(status = 202)]
     Pending(Json<QuotaActionPending>),

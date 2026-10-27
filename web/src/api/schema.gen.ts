@@ -516,7 +516,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * The last known state and quota of every CLIProxy credential, from the database only.
+         * The last known state and quota of every CLIProxy credential, from the database only,
+         *     and which of `/quota/sync` and `/quota/refresh` the presented token may call.
          * @description The answer carries an `ETag` of its bytes. Sent back in `If-None-Match`, it answers 304
          *     with no body while those bytes are the same. Every soft sync moves
          *     `soft_observed_at`, and usage moves `last_used_at` and the predictions, so the tag
@@ -1372,6 +1373,15 @@ export interface components {
         QuotaList: {
             accounts: components["schemas"]["QuotaAccount"][];
         };
+        /**
+         * QuotaListing
+         * @description The answer of `GET /quota`: every credential, and the refreshes the presented token may
+         *     ask for.
+         */
+        QuotaListing: {
+            accounts: components["schemas"]["QuotaAccount"][];
+            refresh_permissions: components["schemas"]["QuotaRefreshPermissions"];
+        };
         /** QuotaOutlier */
         QuotaOutlier: {
             started_at: string;
@@ -1408,6 +1418,15 @@ export interface components {
         /** QuotaRefreshInput */
         QuotaRefreshInput: {
             account_id?: string;
+        };
+        /**
+         * QuotaRefreshPermissions
+         * @description Whether the presented token may call `POST /quota/sync` (`soft`) and `POST /quota/refresh`
+         *     (`hard`).
+         */
+        QuotaRefreshPermissions: {
+            soft: boolean;
+            hard: boolean;
         };
         /** QuotaResetInput */
         QuotaResetInput: {
@@ -2989,7 +3008,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json; charset=utf-8": components["schemas"]["QuotaList"];
+                    "application/json; charset=utf-8": components["schemas"]["QuotaListing"];
                 };
             };
             202: {

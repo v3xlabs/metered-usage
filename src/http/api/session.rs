@@ -17,7 +17,7 @@ impl SessionApi {
     /// Answers whether the request carries the access token.
     #[oai(path = "/session", method = "get", operation_id = "get_session")]
     async fn get_session(&self, request: &Request) -> SessionResponse {
-        if self.state.credentials.token.admits(request) {
+        if self.state.credentials.token.presented(request).is_some() {
             SessionResponse::Authenticated
         } else {
             SessionResponse::Unauthorized(Json(refused()))

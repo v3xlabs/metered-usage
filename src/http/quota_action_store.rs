@@ -36,12 +36,12 @@ impl Invocation<'_> {
     ) -> Result<bool, DatabaseError> {
         if let Some(key) = self.idempotency_key {
             let inserted = sqlx::query("INSERT INTO quota_action_key (credential_id, key, kind, account_id, source_id, action_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING")
-                .bind(&self.identity.credential_id).bind(key).bind(kind).bind(self.account_id).bind(self.source_id).bind(action_id).execute(&mut **write).await?;
+                .bind(self.identity.credential_id).bind(key).bind(kind).bind(self.account_id).bind(self.source_id).bind(action_id).execute(&mut **write).await?;
             if inserted.rows_affected() == 0 {
                 let bound: i64 = sqlx::query_scalar(
                     "SELECT action_id FROM quota_action_key WHERE credential_id = ? AND key = ?",
                 )
-                .bind(&self.identity.credential_id)
+                .bind(self.identity.credential_id)
                 .bind(key)
                 .fetch_one(&mut **write)
                 .await?;
@@ -120,7 +120,7 @@ impl Invocation<'_> {
         }
         let keyed = if let Some(key) = idempotency_key {
             let scope = sqlx::query_as::<_, (String, Option<String>, Option<String>)>("SELECT kind, account_id, source_id FROM quota_action_key WHERE credential_id = ? AND key = ?")
-                .bind(&identity.credential_id).bind(key).fetch_optional(&mut *write).await?;
+                .bind(identity.credential_id).bind(key).fetch_optional(&mut *write).await?;
             if scope.as_ref().is_some_and(|(saved_kind, account, source)| {
                 saved_kind != kind
                     || account.as_deref() != account_id
@@ -129,7 +129,7 @@ impl Invocation<'_> {
                 return Ok(Claim::Conflict);
             }
             sqlx::query_as::<_, SavedAction>("SELECT action_id, requested_by, requested_at, finished_at, response_status, response_body FROM quota_action WHERE action_id = (SELECT action_id FROM quota_action_key WHERE credential_id = ? AND key = ?)")
-                .bind(&identity.credential_id).bind(key).fetch_optional(&mut *write).await?
+                .bind(identity.credential_id).bind(key).fetch_optional(&mut *write).await?
         } else {
             None
         };
@@ -168,7 +168,7 @@ impl Invocation<'_> {
         }
         let action_id = sqlx::query("INSERT INTO quota_action (kind, account_id, source_id, requested_by, requested_at, before_state, shared, credential_id, credential_transport, boot_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)")
             .bind(kind).bind(account_id).bind(source_id).bind(caller)
-            .bind(requested_at.to_string()).bind(before).bind(&identity.credential_id).bind(&identity.transport).bind(state.quota_action_owners.boot()).execute(&mut *write).await?.last_insert_rowid();
+            .bind(requested_at.to_string()).bind(before).bind(identity.credential_id).bind(identity.transport).bind(state.quota_action_owners.boot()).execute(&mut *write).await?.last_insert_rowid();
         if !self.record_key(&mut write, action_id, kind).await? {
             return Ok(Claim::Conflict);
         }
@@ -286,7 +286,7 @@ async fn record_request(
     .bind(action_id)
     .bind(caller)
     .bind(requested_at.to_string())
-    .bind(&identity.credential_id).bind(&identity.transport)
+    .bind(identity.credential_id).bind(identity.transport)
     .execute(&mut **write)
     .await?;
     Ok(())
@@ -351,7 +351,7 @@ pub async fn reject(
     let body = json!({"message": message}).to_string();
     let mut write = state.database.write().await?;
     let action_id = sqlx::query("INSERT INTO quota_action (kind, requested_by, requested_at, finished_at, outcome, before_state, response_status, response_body, credential_id, credential_transport) VALUES (?, ?, ?, ?, 'rejected', '{}', ?, ?, ?, ?)")
-        .bind(kind).bind(caller).bind(now.to_string()).bind(now.to_string()).bind(i64::from(status.as_u16())).bind(&body).bind(&identity.credential_id).bind(&identity.transport).execute(&mut *write).await?.last_insert_rowid();
+        .bind(kind).bind(caller).bind(now.to_string()).bind(now.to_string()).bind(i64::from(status.as_u16())).bind(&body).bind(identity.credential_id).bind(identity.transport).execute(&mut *write).await?.last_insert_rowid();
     record_request(&mut write, action_id, caller, now, identity).await?;
     Change::record(&mut write, &Subject::QuotaAction).await?;
     write.commit().await?;
