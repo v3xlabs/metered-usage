@@ -839,7 +839,7 @@ async fn the_read_token_reads_and_never_writes() {
 }
 
 #[tokio::test]
-async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_account_health() {
+async fn the_consumer_token_reaches_only_its_reads_and_the_quota_refreshes() {
     let gateway = gateway().await.expect("a gateway");
     let bearer = format!("Bearer {CONSUMER_TOKEN}");
     // Each read the consumer token is admitted to, with a query that makes it answer 200.
@@ -863,6 +863,9 @@ async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_accou
         ("get", "/session"),
         ("post", "/session"),
     ];
+    // The refreshes it may ask for. Sent with no X-Quota-Client, each is admitted and then
+    // refused as a bad request.
+    let actions = ["/quota/sync", "/quota/refresh"];
 
     let document = gateway.anonymous.get("/openapi.json").send().await;
     document.assert_status_is_ok();
@@ -912,6 +915,8 @@ async fn the_consumer_token_reads_only_the_changes_the_lists_they_name_and_accou
                 .await;
             let expected = if query.is_some() {
                 StatusCode::OK
+            } else if method == "post" && actions.contains(&path.as_str()) {
+                StatusCode::BAD_REQUEST
             } else {
                 StatusCode::UNAUTHORIZED
             };
