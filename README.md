@@ -1,4 +1,5 @@
 <h1 style="vertical-align: middle;">
+<img src="./web/public/logo.svg" align="left" height="32">
 <span align="left">metered-usage</span>
 <a href="https://0rwx.com" target="_blank" align="right">
 <picture>
