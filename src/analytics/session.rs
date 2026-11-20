@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use jiff::Timestamp;
 use sqlx::FromRow;
 
+use crate::analytics::dimension::Dimension;
 use crate::analytics::filter::AnalyticsFilter;
 use crate::analytics::metrics::{RankBy, UsageMetrics};
 use crate::analytics::query::{Aggregate, Column, aggregate};
@@ -64,13 +65,14 @@ impl SessionUsage {
     ) -> Result<Vec<Self>, AnalyticsError> {
         filter.check(database).await?;
         let rows = aggregate(
+            database,
             filter,
             &[
                 (Column::Expression("usage_event.session_id"), "session_id"),
                 (Column::Expression("usage_event.account_id"), "account_id"),
                 (Column::Expression("usage_event.source_id"), "source_id"),
                 (Column::Expression("usage_event.harness"), "harness"),
-                (Column::Expression("usage_event.model"), "model"),
+                (Column::Key(Dimension::Model), "model"),
             ],
             Some("usage_event.session_id IS NOT NULL"),
         )

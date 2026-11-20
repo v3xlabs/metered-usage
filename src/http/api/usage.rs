@@ -191,6 +191,8 @@ struct UsageEventOutput {
     occurred_at: String,
     provider: String,
     model: String,
+    /// The model name the gateway recorded when it differed from the normalized `model`.
+    raw_model: Option<String>,
     model_alias: Option<String>,
     endpoint: String,
     account: AccountSummaryOutput,
@@ -230,6 +232,7 @@ impl From<UsageEvent> for UsageEventOutput {
             occurred_at: event.occurred_at.to_string(),
             provider: event.provider,
             model: event.model,
+            raw_model: event.raw_model,
             model_alias: event.model_alias,
             endpoint: event.endpoint,
             account: event.account.into(),

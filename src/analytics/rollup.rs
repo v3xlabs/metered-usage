@@ -1,5 +1,6 @@
 //! Usage per UTC hour or day of a closed window, optionally split by one dimension, with
-//! every group kept: nothing is ranked away or merged.
+//! every group kept: nothing is ranked away into "other" (suffixed reasoning models group
+//! under their base).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -64,6 +65,7 @@ impl Rollup {
         let shift = filter.shift(None);
         let group = group_by.map_or(Column::Expression("''"), Column::Key);
         let rows = aggregate(
+            database,
             &filter,
             &[
                 (Column::Bucket(step, &shift), "bucket_key"),

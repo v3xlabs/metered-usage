@@ -104,6 +104,7 @@ pub async fn ingest(
     let received_at = Timestamp::now();
     let mut report = IngestReport::default();
     let mut stored = Vec::with_capacity(records.len());
+    let mut observed_models = Vec::new();
     // The account and outcome of each request that records an arrival.
     let mut arrivals = Vec::new();
     let arrivals_since = received_at - ARRIVAL_WINDOW;
@@ -153,6 +154,7 @@ pub async fn ingest(
                 arrivals.push((account_id, event.failed));
             }
             stored.push(id);
+            observed_models.push((event.provider, event.model));
             report.accepted += 1;
         } else {
             report.duplicates += 1;
@@ -168,6 +170,11 @@ pub async fn ingest(
         Change::record(&mut transaction, &Subject::Usage).await?;
     }
     transaction.commit().await?;
+    database.models.observe(
+        observed_models
+            .iter()
+            .map(|(provider, model)| (provider.as_str(), model.as_str())),
+    );
     if is_new_credential {
         quota::sync_logged(state, Some(source_id)).await;
     }

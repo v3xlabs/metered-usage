@@ -40,10 +40,15 @@ impl Breakdown {
         limit: usize,
     ) -> Result<Self, AnalyticsError> {
         filter.check(database).await?;
-        let mut groups = aggregate(filter, &[(Column::Key(group_by), "group_key")], None)
-            .build_query_as::<GroupRow>()
-            .fetch_all(&database.pool)
-            .await?;
+        let mut groups = aggregate(
+            database,
+            filter,
+            &[(Column::Key(group_by), "group_key")],
+            None,
+        )
+        .build_query_as::<GroupRow>()
+        .fetch_all(&database.pool)
+        .await?;
 
         let mut total = UsageMetrics::default();
         for group in &groups {

@@ -64,7 +64,24 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                   </td>
                   <td class={CELL}>
                     <span class="font-medium text-slate-900 dark:text-slate-100">{record.model}</span>
-                    <Show when={record.model_alias !== record.model && record.model_alias}>
+                    <Show when={record.reasoning_effort}>
+                      {effort => (
+                        <span
+                          class="ml-1.5 rounded-control bg-raised px-1.5 py-px text-[10px] font-medium text-slate-600 dark:text-slate-300"
+                          title="Reasoning effort"
+                        >
+                          {effort()}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={record.raw_model}>
+                      {raw => (
+                        <span class="ml-1.5 text-slate-500 dark:text-slate-500" title="Model name the gateway recorded">
+                          {raw()}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={record.model_alias !== record.model && record.model_alias !== record.raw_model && record.model_alias}>
                       {alias => (
                         <span class="ml-1.5 text-slate-500 dark:text-slate-500" title="Alias the client requested">
                           {alias()}

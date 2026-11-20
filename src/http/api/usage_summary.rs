@@ -30,8 +30,9 @@ impl UsageSummaryApi {
     ///
     /// `group` is `account`, `model` or `provider`, and absent sums everything. Grouped,
     /// `groups` holds every group with usage in the window and each bucket holds every
-    /// group with usage in that bucket, both ordered by key. No group is dropped or merged,
-    /// so the groups of a bucket add up to its `total`. An account is keyed by its
+    /// group with usage in that bucket, both ordered by key. No group is dropped or folded into
+    /// "other" (suffixed reasoning models group under their base), so the groups of a bucket add
+    /// up to its `total`. An account is keyed by its
     /// `account_id`, as `/accounts` lists it. Ungrouped, neither `groups` is present.
     ///
     /// Aggregation is not anonymization. Narrow windows can isolate a call's token counts

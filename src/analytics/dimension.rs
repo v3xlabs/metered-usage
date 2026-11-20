@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::query::{CANONICAL_JOIN, push_canonical_cte};
 use crate::analytics::{AnalyticsError, account_summaries};
 use crate::prelude::*;
 
@@ -25,7 +26,7 @@ impl Dimension {
     #[must_use]
     pub fn expression(self) -> &'static str {
         match self {
-            Self::Model => "usage_event.model",
+            Self::Model => "COALESCE(canonical_model.base, usage_event.model)",
             Self::Provider => "usage_event.provider",
             Self::Account => "CAST(usage_event.account_id AS TEXT)",
             Self::Harness => "COALESCE(usage_event.harness, 'unknown')",
@@ -98,11 +99,15 @@ impl Dimensions {
         filter: &AnalyticsFilter,
     ) -> Result<Self, AnalyticsError> {
         filter.check(database).await?;
-        let mut builder =
-            QueryBuilder::<Sqlite>::new("SELECT usage_event.model, usage_event.provider, ");
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_canonical_cte(&mut builder, database);
         builder
+            .push("SELECT ")
+            .push(Dimension::Model.expression())
+            .push(" AS model, usage_event.provider, ")
             .push(Dimension::Harness.expression())
-            .push(" AS harness, usage_event.account_id, usage_event.source_id FROM usage_event");
+            .push(" AS harness, usage_event.account_id, usage_event.source_id FROM usage_event")
+            .push(CANONICAL_JOIN);
         filter.push_where(&mut builder);
         builder.push(" GROUP BY 1, 2, 3, 4, 5");
         let rows = builder

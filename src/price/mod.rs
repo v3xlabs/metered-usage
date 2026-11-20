@@ -2,6 +2,7 @@
 
 pub mod catalog;
 pub mod cost;
+pub mod effort;
 
 use std::fmt;
 use std::str::FromStr;
@@ -117,6 +118,9 @@ impl ModelPrice {
         )
         .await?;
         transaction.commit().await?;
+        if let Err(error) = database.models.refresh(&database.pool).await {
+            tracing::warn!(%error, "model name cache refresh failed after manual price insert");
+        }
 
         Ok(Self {
             id,

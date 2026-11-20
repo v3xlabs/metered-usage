@@ -34,6 +34,9 @@ impl AppState {
         credentials: Credentials,
         config: Config,
     ) -> Result<Self, reqwest::Error> {
+        database
+            .models
+            .set_priced_as(config.pricing.priced_as.clone());
         Ok(Self {
             database,
             credentials,

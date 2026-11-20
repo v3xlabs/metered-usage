@@ -30,6 +30,7 @@ const USAGE_EVENT_SHAPE: Shape<UsageEvent> = {
   occurred_at: "string",
   provider: "string",
   model: "string",
+  raw_model: { optional: "string" },
   model_alias: { optional: "string" },
   endpoint: "string",
   account: { shape: ACCOUNT_SUMMARY_SHAPE },

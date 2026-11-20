@@ -8,7 +8,7 @@ use crate::analytics::AnalyticsError;
 use crate::analytics::bucket::Bucket;
 use crate::analytics::filter::{AnalyticsFilter, Recorded, Shift};
 use crate::analytics::metrics::UsageMetrics;
-use crate::analytics::query::{Aggregate, Column, aggregate};
+use crate::analytics::query::{Aggregate, CANONICAL_JOIN, Column, aggregate, push_canonical_cte};
 use crate::prelude::*;
 
 #[derive(Debug)]
@@ -68,8 +68,10 @@ impl Overall {
         filter: &AnalyticsFilter,
         shift: &Shift,
     ) -> Result<Self, AnalyticsError> {
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT COUNT(DISTINCT usage_event.model) AS models, \
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_canonical_cte(&mut builder, database);
+        builder.push(
+            "SELECT COUNT(DISTINCT COALESCE(canonical_model.base, usage_event.model)) AS models, \
              COUNT(DISTINCT usage_event.provider) AS providers, \
              COUNT(DISTINCT usage_event.account_id) AS accounts, \
              COUNT(DISTINCT COALESCE(usage_event.harness, 'unknown')) AS harnesses, \
@@ -78,11 +80,13 @@ impl Overall {
              COUNT(DISTINCT ",
         );
         Bucket::Day.push_expression(&mut builder, shift);
-        builder.push(
-            ") AS active_days, \
-             TOTAL(usage_event.cache_read_tokens) / NULLIF(TOTAL(usage_event.input_tokens), 0) \
-             AS cache_hit_rate FROM usage_event",
-        );
+        builder
+            .push(
+                ") AS active_days, \
+                 TOTAL(usage_event.cache_read_tokens) / NULLIF(TOTAL(usage_event.input_tokens), 0) \
+                 AS cache_hit_rate FROM usage_event",
+            )
+            .push(CANONICAL_JOIN);
         filter.push_where(&mut builder);
 
         Ok(builder
@@ -108,6 +112,7 @@ impl Summary {
         let recorded = Recorded::load(database).await?;
         let shift = filter.shift(recorded);
         let days = aggregate(
+            database,
             filter,
             &[(Column::Bucket(Bucket::Day, &shift), "day")],
             None,

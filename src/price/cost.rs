@@ -10,6 +10,7 @@ use crate::config::PricingConfig;
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::price::ModelPrice;
+use crate::price::effort::ModelCache;
 use crate::usage::{PricedEvent, UsageUpdate};
 
 /// Picks one price per unpriced event and freezes its cost onto the event. Events no
@@ -24,21 +25,28 @@ use crate::usage::{PricedEvent, UsageUpdate};
 /// because the exact name ranks first.
 const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model \
          FROM json_each(?1)), \
-     ranked AS ( \
-     SELECT event.event_id, price.price_id, ROW_NUMBER() OVER ( \
-         PARTITION BY event.event_id \
-         ORDER BY price.model = event.model DESC, \
-             price.service_tier IS NOT NULL DESC, \
-             CASE price.origin WHEN 'manual' THEN 0 WHEN 'litellm_live' THEN 1 ELSE 2 END, \
-             price.min_input_tokens DESC, \
-             price.provider IS NOT NULL DESC, \
-             price.effective_from DESC, \
-             price.price_id DESC) AS preference \
+     resolved_as AS (SELECT json_extract(value, '$.provider') AS provider, \
+         json_extract(value, '$.model') AS model, \
+         json_extract(value, '$.price_model') AS price_model \
+         FROM json_each(?2)), \
+     matched AS ( \
+     SELECT event.event_id, price.price_id, \
+         price.model = event.model AS exact_model, \
+         NOT (price.model = event.model \
+             OR COALESCE(price.model = event.model_alias, 0) \
+             OR COALESCE(price.model = priced_as.price_model, 0) \
+             OR (price.model = event.provider || '/' || event.model \
+                 AND price.provider = event.provider)) AS from_resolved, \
+         price.service_tier, price.origin, price.min_input_tokens, \
+         price.provider, price.effective_from \
      FROM usage_event AS event \
      LEFT JOIN priced_as ON priced_as.model = event.model \
+     LEFT JOIN resolved_as \
+         ON resolved_as.provider = event.provider AND resolved_as.model = event.model \
      JOIN model_price AS price \
          ON (price.model = event.model OR price.model = event.model_alias \
              OR price.model = priced_as.price_model \
+             OR price.model = resolved_as.price_model \
              OR (price.model = event.provider || '/' || event.model \
                  AND price.provider = event.provider)) \
          AND (price.origin <> 'manual' OR price.provider IS NULL \
@@ -47,20 +55,33 @@ const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model
          AND price.min_input_tokens <= event.input_tokens \
          AND price.effective_from <= event.occurred_at \
      WHERE event.list_cost_usd IS NULL), \
-     chosen AS (SELECT event_id, price_id FROM ranked WHERE preference = 1) \
+     ranked AS ( \
+     SELECT event_id, price_id, from_resolved, ROW_NUMBER() OVER ( \
+         PARTITION BY event_id \
+         ORDER BY exact_model DESC, \
+             from_resolved ASC, \
+             service_tier IS NOT NULL DESC, \
+             CASE origin WHEN 'manual' THEN 0 WHEN 'litellm_live' THEN 1 ELSE 2 END, \
+             min_input_tokens DESC, \
+             provider IS NOT NULL DESC, \
+             effective_from DESC, \
+             price_id DESC) AS preference \
+     FROM matched), \
+     chosen AS (SELECT event_id, price_id, from_resolved FROM ranked WHERE preference = 1) \
      UPDATE usage_event SET price_id = chosen.price_id, \
      list_cost_usd = (MAX(usage_event.input_tokens - usage_event.cache_read_tokens \
              - usage_event.cache_write_tokens, 0) * price.input_usd_per_mtok \
          + usage_event.cache_read_tokens * price.cached_input_usd_per_mtok \
          + usage_event.cache_write_tokens * price.cache_write_usd_per_mtok \
          + usage_event.output_tokens * price.output_usd_per_mtok) / 1e6, \
-     billed_cost_usd = COALESCE(usage_event.billed_cost_usd, \
-         CASE WHEN account.auth_kind = 'oauth' THEN 0.0 ELSE \
-         (MAX(usage_event.input_tokens - usage_event.cache_read_tokens \
-             - usage_event.cache_write_tokens, 0) * price.input_usd_per_mtok \
-         + usage_event.cache_read_tokens * price.cached_input_usd_per_mtok \
-         + usage_event.cache_write_tokens * price.cache_write_usd_per_mtok \
-         + usage_event.output_tokens * price.output_usd_per_mtok) / 1e6 END) \
+     billed_cost_usd = CASE WHEN chosen.from_resolved THEN usage_event.billed_cost_usd \
+         ELSE COALESCE(usage_event.billed_cost_usd, \
+             CASE WHEN account.auth_kind = 'oauth' THEN 0.0 ELSE \
+             (MAX(usage_event.input_tokens - usage_event.cache_read_tokens \
+                 - usage_event.cache_write_tokens, 0) * price.input_usd_per_mtok \
+             + usage_event.cache_read_tokens * price.cached_input_usd_per_mtok \
+             + usage_event.cache_write_tokens * price.cache_write_usd_per_mtok \
+             + usage_event.output_tokens * price.output_usd_per_mtok) / 1e6 END) END \
      FROM chosen, model_price AS price, account \
      WHERE usage_event.event_id = chosen.event_id \
      AND price.price_id = chosen.price_id \
@@ -73,7 +94,12 @@ impl ModelPrice {
     /// once that is committed.
     pub async fn fill(state: &AppState) -> Result<usize, DatabaseError> {
         let mut transaction = state.database.write().await?;
-        let priced = fill(&mut transaction, &state.config.pricing).await?;
+        let priced = fill(
+            &mut transaction,
+            &state.config.pricing,
+            &state.database.models,
+        )
+        .await?;
         if !priced.is_empty() {
             Change::record(&mut transaction, &Subject::Usage).await?;
         }
@@ -104,7 +130,12 @@ impl ModelPrice {
         .execute(&mut *transaction)
         .await?
         .rows_affected();
-        let priced = fill(&mut transaction, &state.config.pricing).await?;
+        let priced = fill(
+            &mut transaction,
+            &state.config.pricing,
+            &state.database.models,
+        )
+        .await?;
         if cleared > 0 || !priced.is_empty() {
             Change::record(&mut transaction, &Subject::Usage).await?;
         }
@@ -118,14 +149,22 @@ impl ModelPrice {
 async fn fill(
     connection: &mut SqliteConnection,
     pricing: &PricingConfig,
+    models: &ModelCache,
 ) -> Result<Vec<PricedEvent>, DatabaseError> {
     let priced_as = pricing
         .priced_as
         .iter()
         .map(|(model, key)| (model, key.as_str()))
         .collect::<Value>();
+    let unpriced: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT provider, model FROM usage_event WHERE list_cost_usd IS NULL",
+    )
+    .fetch_all(&mut *connection)
+    .await?;
+    let resolved_as = models.resolved_as_json(&unpriced);
     Ok(sqlx::query_as::<_, PricedEvent>(FILL)
         .bind(priced_as.to_string())
+        .bind(resolved_as)
         .fetch_all(connection)
         .await?)
 }

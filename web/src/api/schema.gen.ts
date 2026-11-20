@@ -1641,6 +1641,8 @@ export interface components {
             occurred_at: string;
             provider: string;
             model: string;
+            /** @description The model name the gateway recorded when it differed from the normalized `model`. */
+            raw_model?: string;
             model_alias?: string;
             endpoint: string;
             account: components["schemas"]["AccountSummary"];

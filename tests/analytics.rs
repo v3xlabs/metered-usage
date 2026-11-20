@@ -1310,3 +1310,123 @@ async fn the_health_strip_zero_fills_a_named_idle_account_and_refuses_a_bad_wind
 
     Ok(())
 }
+
+fn antigravity_row(id: &'static str, at: &'static str, model: &'static str) -> Request {
+    Request {
+        upstream_id: id,
+        at,
+        provider: "antigravity",
+        model,
+        account: ("ag", AuthKind::OAuth),
+        harness: Some("omp"),
+        session: Some("sess-neon"),
+        input: 1000,
+        output: 1000,
+        cache_read: 0,
+        cache_write: 0,
+        latency_ms: Some(500),
+        ttft_ms: Some(100),
+        failed: false,
+    }
+}
+
+#[tokio::test]
+async fn effort_suffix_analytics() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness
+        .client
+        .post("/api/prices")
+        .body_json(&json!({
+            "model": "gemini/gemini-4-neon",
+            "effective_from": "2025-01-01T00:00:00Z",
+            "input_usd_per_mtok": 2.0,
+            "cached_input_usd_per_mtok": 0.2,
+            "cache_write_usd_per_mtok": 2.0,
+            "output_usd_per_mtok": 12.0,
+        }))
+        .send()
+        .await
+        .assert_status_is_ok();
+    harness
+        .ingest(
+            "alpha",
+            &[
+                antigravity_row("r1", "2026-04-02T10:00:00Z", "gemini-4-neon-xhigh"),
+                antigravity_row("r2", "2026-04-02T11:00:00Z", "gemini-4-neon-high"),
+                antigravity_row("r3", "2026-04-02T12:00:00Z", "something-high"),
+            ],
+        )
+        .await?;
+    ModelPrice::fill(&harness.state).await?;
+
+    let window = "from=2026-04-02T00:00:00Z&to=2026-04-03T00:00:00Z";
+    let dims: Dimensions = harness
+        .get(&format!("/api/analytics/dimensions?{window}"))
+        .await;
+    assert_eq!(dims.models, vec!["gemini-4-neon", "something-high"]);
+
+    let breakdown: Breakdown = harness
+        .get(&format!("/api/analytics/breakdown?group_by=model&{window}"))
+        .await;
+    assert_eq!(breakdown.rows.len(), 2);
+    let neon = breakdown
+        .rows
+        .iter()
+        .find(|row| row.key == "gemini-4-neon")
+        .ok_or("merged gemini-4-neon row")?;
+    assert_eq!(neon.metrics.requests, 2);
+    close(neon.metrics.list_cost_usd, 0.028);
+
+    let filtered: Breakdown = harness
+        .get(&format!(
+            "/api/analytics/breakdown?group_by=model&model=gemini-4-neon&{window}"
+        ))
+        .await;
+    assert_eq!(filtered.rows.len(), 1);
+    assert_eq!(filtered.rows[0].key, "gemini-4-neon");
+    assert_eq!(filtered.rows[0].metrics.requests, 2);
+
+    let raw_filtered: Breakdown = harness
+        .get(&format!(
+            "/api/analytics/breakdown?group_by=model&model=gemini-4-neon-xhigh&{window}"
+        ))
+        .await;
+    assert_eq!(raw_filtered.rows.len(), 1);
+    assert_eq!(raw_filtered.rows[0].key, "gemini-4-neon");
+    assert_eq!(raw_filtered.rows[0].metrics.requests, 1);
+    let series: Series = harness
+        .get(&format!(
+            "/api/analytics/series?group_by=model&bucket=day&{window}"
+        ))
+        .await;
+    let neon_series = series
+        .buckets
+        .iter()
+        .find(|bucket| bucket.key == "gemini-4-neon")
+        .ok_or("merged series bucket")?;
+    assert_eq!(neon_series.metrics.requests, 2);
+
+    let sessions: SessionList = harness
+        .get(&format!("/api/analytics/sessions?{window}"))
+        .await;
+    assert_eq!(
+        sessions.sessions[0].models,
+        vec!["gemini-4-neon", "something-high"]
+    );
+
+    let summary: Summary = harness
+        .get(&format!("/api/analytics/summary?{window}"))
+        .await;
+    assert_eq!(summary.distinct.models, 2);
+
+    let samples: RequestSamples = harness
+        .get(&format!("/api/analytics/requests?{window}"))
+        .await;
+    let models: Vec<&str> = samples.samples.iter().map(|s| s.model.as_str()).collect();
+    assert_eq!(
+        models,
+        vec!["gemini-4-neon", "gemini-4-neon", "something-high"]
+    );
+
+    Ok(())
+}

@@ -99,7 +99,16 @@ impl AnalyticsFilter {
         }
         push_in(builder, "usage_event.source_id", &self.source_ids);
         push_in(builder, "usage_event.account_id", &self.account_ids);
-        push_in(builder, "usage_event.model", &self.models);
+        if !self.models.is_empty() {
+            builder.push(" AND (usage_event.model IN (");
+            push_values(builder, &self.models);
+            builder.push(
+                ") OR (usage_event.provider, usage_event.model) IN \
+                 (SELECT provider, model FROM canonical_model WHERE base IN (",
+            );
+            push_values(builder, &self.models);
+            builder.push(")))");
+        }
         push_in(builder, "usage_event.provider", &self.providers);
         push_in(builder, Dimension::Harness.expression(), &self.harnesses);
     }
@@ -199,9 +208,16 @@ where
         return;
     }
     builder.push(" AND ").push(column).push(" IN (");
+    push_values(builder, values);
+    builder.push(")");
+}
+
+fn push_values<V>(builder: &mut QueryBuilder<Sqlite>, values: &[V])
+where
+    for<'v> &'v V: Encode<'v, Sqlite> + Type<Sqlite>,
+{
     let mut separated = builder.separated(", ");
     for value in values {
         separated.push_bind(value);
     }
-    builder.push(")");
 }

@@ -15,6 +15,7 @@ use sqlx::sqlite::{SqliteTypeInfo, SqliteValueRef};
 use sqlx::{Database as SqlxDatabase, Decode, Encode, FromRow, QueryBuilder, Sqlite, Type};
 
 use crate::account::{Account, AccountSummary, NewAccount};
+use crate::analytics::query::push_canonical_cte;
 use crate::database::codec::StoredTimestamp;
 use crate::database::{Database, DatabaseError};
 use crate::id::Id;
@@ -53,6 +54,8 @@ pub struct UsageEvent {
     #[sqlx(rename = "event_provider")]
     pub provider: String,
     pub model: String,
+    #[sqlx(skip)]
+    pub raw_model: Option<String>,
     pub model_alias: Option<String>,
     pub endpoint: String,
     pub caller: Option<String>,
@@ -96,10 +99,14 @@ impl UsageEvent {
         }
         builder.push(") ORDER BY usage_event.event_id");
 
-        Ok(builder
+        let mut events = builder
             .build_query_as::<Self>()
             .fetch_all(&database.pool)
-            .await?)
+            .await?;
+        for event in &mut events {
+            database.models.normalize_event(event);
+        }
+        Ok(events)
     }
 
     /// Newest first, or oldest first after a [`Cursor::After`].
@@ -109,7 +116,11 @@ impl UsageEvent {
         limit: i64,
         cursor: Option<Cursor>,
     ) -> Result<Vec<Self>, DatabaseError> {
-        let mut builder = QueryBuilder::<Sqlite>::new(SELECT);
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        if filter.model.is_some() {
+            push_canonical_cte(&mut builder, database);
+        }
+        builder.push(SELECT);
         filter.push_to(&mut builder);
         let order = match cursor {
             None => " ORDER BY usage_event.event_id DESC",
@@ -128,10 +139,14 @@ impl UsageEvent {
         };
         builder.push(order).push(" LIMIT ").push_bind(limit);
 
-        Ok(builder
+        let mut events = builder
             .build_query_as::<Self>()
             .fetch_all(&database.pool)
-            .await?)
+            .await?;
+        for event in &mut events {
+            database.models.normalize_event(event);
+        }
+        Ok(events)
     }
 }
 
@@ -293,7 +308,15 @@ impl UsageFilter {
                 .push_bind(source_id);
         }
         if let Some(model) = self.model.as_deref() {
-            builder.push(" AND usage_event.model = ").push_bind(model);
+            builder
+                .push(" AND (usage_event.model = ")
+                .push_bind(model)
+                .push(
+                    " OR (usage_event.provider, usage_event.model) IN \
+                     (SELECT provider, model FROM canonical_model WHERE base = ",
+                )
+                .push_bind(model)
+                .push("))");
         }
         if let Some(account_id) = self.account_id {
             builder

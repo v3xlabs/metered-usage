@@ -12,10 +12,12 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 use tokio::sync::watch;
 
 use crate::id::IdGenerator;
+use crate::price::effort::ModelCache;
 
 pub struct Database {
     pub pool: SqlitePool,
     pub ids: IdGenerator,
+    pub models: ModelCache,
     /// Sent after every commit that recorded a change, so a reader waiting for one wakes.
     changes: watch::Sender<()>,
 }
@@ -51,10 +53,12 @@ impl Database {
             .connect_with(options)
             .await?;
         sqlx::migrate!("./migrations").run(&pool).await?;
+        let models = ModelCache::load(&pool).await?;
 
         Ok(Self {
             pool,
             ids: IdGenerator::new(node),
+            models,
             changes: watch::Sender::new(()),
         })
     }

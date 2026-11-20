@@ -5,6 +5,7 @@ use sqlx::{FromRow, QueryBuilder, Sqlite};
 
 use crate::analytics::AnalyticsError;
 use crate::analytics::filter::AnalyticsFilter;
+use crate::analytics::query::{CANONICAL_JOIN, push_canonical_cte};
 use crate::database::codec::StoredTimestamp;
 use crate::prelude::*;
 
@@ -46,10 +47,15 @@ impl RequestSamples {
         limit: i64,
     ) -> Result<Self, AnalyticsError> {
         filter.check(database).await?;
-        let mut count = QueryBuilder::<Sqlite>::new(
-            "SELECT COUNT(*) AS requests, COUNT(DISTINCT usage_event.model) AS models \
-             FROM usage_event",
-        );
+        let mut count = QueryBuilder::<Sqlite>::new("");
+        push_canonical_cte(&mut count, database);
+        count
+            .push(
+                "SELECT COUNT(*) AS requests, \
+                 COUNT(DISTINCT COALESCE(canonical_model.base, usage_event.model)) AS models \
+                 FROM usage_event",
+            )
+            .push(CANONICAL_JOIN);
         filter.push_where(&mut count);
         count.push(TIMED);
         let population = count
@@ -64,16 +70,22 @@ impl RequestSamples {
         }
         let quota = (limit + population.models - 1) / population.models;
 
-        let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT occurred_at, model, input_tokens, output_tokens, latency_ms, ttft_ms \
-             FROM (SELECT usage_event.occurred_at, usage_event.model, \
-             usage_event.input_tokens, usage_event.output_tokens, usage_event.latency_ms, \
-             usage_event.ttft_ms, \
-             ROW_NUMBER() OVER (PARTITION BY usage_event.model \
-                 ORDER BY usage_event.occurred_at, usage_event.event_id) - 1 AS position, \
-             COUNT(*) OVER (PARTITION BY usage_event.model) AS model_requests \
-             FROM usage_event",
-        );
+        let mut builder = QueryBuilder::<Sqlite>::new("");
+        push_canonical_cte(&mut builder, database);
+        builder
+            .push(
+                "SELECT occurred_at, model, input_tokens, output_tokens, latency_ms, ttft_ms \
+                 FROM (SELECT usage_event.occurred_at, \
+                 COALESCE(canonical_model.base, usage_event.model) AS model, \
+                 usage_event.input_tokens, usage_event.output_tokens, usage_event.latency_ms, \
+                 usage_event.ttft_ms, \
+                 ROW_NUMBER() OVER (PARTITION BY COALESCE(canonical_model.base, usage_event.model) \
+                     ORDER BY usage_event.occurred_at, usage_event.event_id) - 1 AS position, \
+                 COUNT(*) OVER (PARTITION BY COALESCE(canonical_model.base, usage_event.model)) \
+                     AS model_requests \
+                 FROM usage_event",
+            )
+            .push(CANONICAL_JOIN);
         filter.push_where(&mut builder);
         builder
             .push(TIMED)

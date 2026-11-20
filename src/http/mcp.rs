@@ -232,6 +232,10 @@ struct EventOutput {
     occurred_at: String,
     provider: String,
     model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
     account: AccountSummaryOutput,
     harness: Option<String>,
     input_tokens: i64,
@@ -528,6 +532,8 @@ impl UsageTools {
                     occurred_at: event.occurred_at.to_string(),
                     provider: event.provider,
                     model: event.model,
+                    raw_model: event.raw_model,
+                    reasoning_effort: event.reasoning_effort,
                     account: event.account.into(),
                     harness: event.harness,
                     input_tokens: event.input_tokens,

@@ -914,3 +914,232 @@ async fn an_open_stream_learns_the_cost_of_an_event_priced_after_it_was_sent() -
 
     Ok(())
 }
+
+async fn seed_litellm_effort_slice(harness: &Harness<impl Endpoint>) -> Result<(), Failure> {
+    let slice: Value = serde_json::from_str(include_str!("fixtures/litellm_effort_slice.json"))?;
+    let mut map = harness.maps.public.lock().await;
+    if let Some(entries) = slice.as_object() {
+        for (key, value) in entries {
+            map[key] = value.clone();
+        }
+    }
+    for (key, provider, input, output) in [
+        ("gemini/gemini-foo-high", "gemini", 0.0, 0.0),
+        ("gemini/gemini-foo", "gemini", 2e-06, 12e-06),
+        ("anthropic/claude-x", "anthropic", 9e-06, 9e-06),
+        ("foo", "openai", 1e-06, 2e-06),
+        ("foo-high", "openai", 9e-06, 9e-06),
+        ("bar", "openai", 3e-06, 6e-06),
+        ("llama", "openai", 1e-06, 1e-06),
+        ("groq/llama-high", "groq", 7e-06, 7e-06),
+        ("cerebras/llama-high", "cerebras", 8e-06, 8e-06),
+        ("qwen3", "openai", 1e-06, 1e-06),
+        ("alias-pub", "moonshot", 1e-06, 1e-06),
+    ] {
+        map[key] = json!({
+            "litellm_provider": provider,
+            "input_cost_per_token": input,
+            "output_cost_per_token": output,
+        });
+    }
+    drop(map);
+    harness.sync().await?;
+    harness
+        .manual(&json!({
+            "model": "moonshot/kimi-k3",
+            "input_usd_per_mtok": 5.0,
+            "cached_input_usd_per_mtok": 5.0,
+            "cache_write_usd_per_mtok": 5.0,
+            "output_usd_per_mtok": 5.0,
+            "effective_from": "2020-01-01T00:00:00Z",
+        }))
+        .await?;
+    Ok(())
+}
+
+async fn priced_model_key(
+    harness: &Harness<impl Endpoint>,
+    upstream_id: &str,
+) -> Result<Option<String>, Failure> {
+    Ok(sqlx::query_scalar(
+        "SELECT mp.model FROM usage_event ue \
+         LEFT JOIN model_price mp ON mp.price_id = ue.price_id \
+         WHERE ue.upstream_id = ?",
+    )
+    .bind(upstream_id)
+    .fetch_one(&harness.state.database.pool)
+    .await?)
+}
+
+#[tokio::test]
+async fn effort_suffix_litellm_slice() -> Result<(), Failure> {
+    let harness = harness().await?;
+    seed_litellm_effort_slice(&harness).await?;
+
+    let event = |upstream_id: &str, provider: &str, model: &str| {
+        let mut row = request(upstream_id, at("2025-06-01T00:00:00Z")?, 1000, 1000);
+        provider.clone_into(&mut row.provider);
+        model.clone_into(&mut row.model);
+        Ok::<_, Failure>(row)
+    };
+    let mut api_cut = event("bar-cut", "openai", "bar-high")?;
+    api_cut.account = NewAccount::new("auth-api".to_owned(), AuthKind::ApiKey, Some("sk-1"));
+    let mut manual_over_alias = event("ranked", "moonshot", "kimi-k3-256k")?;
+    manual_over_alias.model_alias = Some("alias-pub".to_owned());
+
+    harness
+        .store(
+            "proxy",
+            vec![
+                event("neon-xhigh", "antigravity", "gemini-4-neon-xhigh")?,
+                event("neon-cli", "gemini-cli", "gemini-4-neon-high")?,
+                event("argon-high", "antigravity", "gemini-4-argon-high")?,
+                event("carbon-high", "antigravity", "gemini-4-carbon-high")?,
+                event("hydrogen-xhigh", "antigravity", "gemini-4-hydrogen-xhigh")?,
+                event("priced-as-base", "moonshot", "kimi-k3-256k-high")?,
+                event("grok-unique", "xai", "grok-4-high")?,
+                event("mistral", "mistral", "mistral-medium")?,
+                event("foo-priced", "openai", "foo-high")?,
+                api_cut,
+                manual_over_alias,
+                event("free-exact", "antigravity", "gemini-foo-high")?,
+                event("unsuffixed-claude", "claude", "claude-x")?,
+                event("qwen", "qwen", "qwen-max")?,
+                event("two-provider-exact", "antigravity", "llama-high")?,
+                event("two-slash-exact", "antigravity", "qwen3-max")?,
+                event("gpt-oss-ambig", "antigravity", "gpt-oss-120b-medium")?,
+                event("prefixed-event", "antigravity", "azure/gemini-4-neon-high")?,
+                event("something", "antigravity", "something-high")?,
+                event("highspeed", "moonshot", "kimi-k3.1-pro-highspeed")?,
+            ],
+        )
+        .await?;
+    harness.fill().await?;
+
+    for (id, expected_key, expected_list, expect_billed_none) in [
+        ("neon-xhigh", "gemini/gemini-4-neon", 0.018, true),
+        ("neon-cli", "gemini/gemini-4-neon", 0.018, true),
+        ("argon-high", "gemini/gemini-4-argon", 0.012, true),
+        ("carbon-high", "gemini/gemini-4-carbon", 0.012, true),
+        ("hydrogen-xhigh", "gemini/gemini-4-hydrogen", 0.009, true),
+        ("priced-as-base", "moonshot/kimi-k3", 0.01, true),
+        ("grok-unique", "azure_ai/grok-4", 0.018, true),
+        ("mistral", "mistral/mistral-medium", 0.009, false),
+        ("foo-priced", "foo-high", 0.018, false),
+        ("bar-cut", "bar", 0.009, true),
+        ("ranked", "moonshot/kimi-k3", 0.01, false),
+    ] {
+        assert_eq!(
+            priced_model_key(&harness, id).await?.as_deref(),
+            Some(expected_key),
+            "{id} chosen key"
+        );
+        let cost = harness.cost(id).await?;
+        close(cost.list_cost_usd, expected_list);
+        if expect_billed_none {
+            assert_eq!(cost.billed_cost_usd, None, "{id} billed stays NULL");
+        }
+    }
+    for unpriced in [
+        "free-exact",
+        "unsuffixed-claude",
+        "qwen",
+        "two-provider-exact",
+        "two-slash-exact",
+        "gpt-oss-ambig",
+        "prefixed-event",
+        "something",
+        "highspeed",
+    ] {
+        assert_eq!(
+            harness.cost(unpriced).await?.price_id,
+            None,
+            "{unpriced} stays unpriced"
+        );
+    }
+
+    let stored_model: String =
+        sqlx::query_scalar("SELECT model FROM usage_event WHERE upstream_id = 'neon-xhigh'")
+            .fetch_one(&harness.state.database.pool)
+            .await?;
+    assert_eq!(stored_model, "gemini-4-neon-xhigh");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn effort_suffix_events() -> Result<(), Failure> {
+    let harness = harness().await?;
+    seed_litellm_effort_slice(&harness).await?;
+
+    let event = |upstream_id: &str, occurred_at: &str, model: &str| {
+        let mut row = request(upstream_id, at(occurred_at)?, 1000, 1000);
+        "antigravity".clone_into(&mut row.provider);
+        model.clone_into(&mut row.model);
+        Ok::<_, Failure>(row)
+    };
+    let mut neon_with_stored_effort = event(
+        "neon-stored",
+        "2025-06-01T11:30:00Z",
+        "gemini-4-neon-medium",
+    )?;
+    neon_with_stored_effort.model_alias = Some("gemini-4-neon-medium".to_owned());
+    neon_with_stored_effort.reasoning_effort = Some("high".to_owned());
+
+    harness
+        .store(
+            "proxy",
+            vec![
+                event("neon-xhigh", "2025-06-01T10:00:00Z", "gemini-4-neon-xhigh")?,
+                neon_with_stored_effort,
+                event("safe", "2025-06-01T12:00:00Z", "something-high")?,
+            ],
+        )
+        .await?;
+    harness.fill().await?;
+
+    let events_response = harness.client.get("/api/usage/events").send().await;
+    events_response.assert_status_is_ok();
+    let events_json: Value = events_response.json().await.value().deserialize();
+    let events = events_json["events"].as_array().ok_or("events array")?;
+    let xhigh = events
+        .iter()
+        .find(|row| row["upstream_id"] == "neon-xhigh")
+        .ok_or("neon-xhigh event")?;
+    assert_eq!(xhigh["model"], "gemini-4-neon");
+    assert_eq!(xhigh["raw_model"], "gemini-4-neon-xhigh");
+    assert_eq!(xhigh.get("model_alias"), None);
+    assert_eq!(xhigh["reasoning_effort"], "xhigh");
+
+    let stored = events
+        .iter()
+        .find(|row| row["upstream_id"] == "neon-stored")
+        .ok_or("neon-stored event")?;
+    assert_eq!(stored["model"], "gemini-4-neon");
+    assert_eq!(stored["raw_model"], "gemini-4-neon-medium");
+    assert_eq!(stored["model_alias"], "gemini-4-neon-medium");
+    assert_eq!(stored["reasoning_effort"], "high");
+
+    let safe = events
+        .iter()
+        .find(|row| row["upstream_id"] == "safe")
+        .ok_or("safe event")?;
+    assert_eq!(safe["model"], "something-high");
+    assert_eq!(safe.get("raw_model"), None);
+    assert_eq!(safe.get("reasoning_effort"), None);
+
+    for (query, expected_len) in [
+        ("/api/usage/events?model=gemini-4-neon", 2),
+        ("/api/usage/events?model=gemini-4-neon-xhigh", 1),
+    ] {
+        let filtered = harness.client.get(query).send().await;
+        filtered.assert_status_is_ok();
+        let filtered_json: Value = filtered.json().await.value().deserialize();
+        assert_eq!(
+            filtered_json["events"].as_array().ok_or("events")?.len(),
+            expected_len
+        );
+    }
+
+    Ok(())
+}

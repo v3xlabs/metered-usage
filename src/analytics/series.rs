@@ -58,6 +58,7 @@ impl SeriesBucket {
             .group_by
             .map_or(Column::Expression("'all'"), Column::Key);
         let rows = aggregate(
+            database,
             filter,
             &[
                 (Column::Bucket(query.bucket, &shift), "bucket_key"),
