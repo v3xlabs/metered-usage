@@ -1,0 +1,23 @@
+{
+  "groups": [
+    {
+      "displayName": "Claude and GPT models",
+      "buckets": [
+        {
+          "bucketId": "3p-5h",
+          "displayName": "Five Hour Limit Remaining",
+          "window": "5h",
+          "resetTime": "2026-11-21T05:00:00Z",
+          "remainingFraction": 1
+        },
+        {
+          "bucketId": "3p-weekly",
+          "displayName": "Weekly Limit Remaining",
+          "window": "weekly",
+          "resetTime": "2026-11-27T00:00:00Z",
+          "remainingFraction": 1
+        }
+      ]
+    }
+  ]
+}

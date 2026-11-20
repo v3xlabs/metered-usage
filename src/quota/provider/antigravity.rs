@@ -1,5 +1,6 @@
-//! Antigravity: `retrieveUserQuotaSummary` tried on three hosts in order until one answers,
-//! and `loadCodeAssist` for the plan. Buckets report the fraction remaining.
+//! Antigravity: `retrieveUserQuotaSummary` asked on all three hosts, and `loadCodeAssist` for
+//! the plan. A host may answer with some groups only, so the windows of every answer are
+//! kept, the first report of a window winning. Buckets report the fraction remaining.
 
 use serde_json::Value;
 
@@ -76,6 +77,7 @@ pub async fn fetch(
     let quota = async {
         let mut failure = None;
         let mut answered = false;
+        let mut found = Vec::new();
         for url in QUOTA_URLS {
             let outcome = management
                 .call(&ApiCall {
@@ -91,10 +93,7 @@ pub async fn fetch(
             match outcome {
                 Ok(payload) => {
                     answered = true;
-                    let windows = windows(&unwrap_body(payload));
-                    if !windows.is_empty() {
-                        return Ok(windows);
-                    }
+                    found.extend(windows(&unwrap_body(payload)));
                 }
                 Err(error) => {
                     // 403 and 404 say most about the credential, so they outrank a later
@@ -107,7 +106,7 @@ pub async fn fetch(
             }
         }
         if answered {
-            Ok(Vec::new())
+            Ok(found)
         } else {
             Err(failure.unwrap_or(RefreshError::Empty))
         }
@@ -150,6 +149,7 @@ fn windows(payload: &Value) -> Vec<NewWindow> {
         let group_id = Some(slug(&group_label))
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| format!("quota-group-{}", group_index + 1));
+        let group_name = group_label.strip_suffix(" models").unwrap_or(&group_label);
         let buckets = group
             .get("buckets")
             .and_then(Value::as_array)
@@ -168,14 +168,19 @@ fn windows(payload: &Value) -> Vec<NewWindow> {
                     Some(window) => format!("{group_id}-{window}"),
                     None => format!("{group_id}-bucket-{}", bucket_index + 1),
                 });
-            let label = field(bucket, &["displayName", "display_name"])
-                .and_then(text)
-                .unwrap_or_else(|| id.clone());
+            let seconds = window.as_deref().and_then(window_seconds);
+            let span = match seconds {
+                Some(FIVE_HOURS) => "5-hour".to_owned(),
+                Some(WEEK) => "Weekly".to_owned(),
+                _ => field(bucket, &["displayName", "display_name"])
+                    .and_then(text)
+                    .unwrap_or_else(|| id.clone()),
+            };
             windows.push(NewWindow {
                 key: id,
-                label: format!("{group_label}: {label}"),
+                label: format!("{group_name}, {span}"),
                 used_fraction: Some(1.0 - remaining.clamp(0.0, 1.0)),
-                window_seconds: window.as_deref().and_then(window_seconds),
+                window_seconds: seconds,
                 resets_at: field(bucket, &["resetTime", "reset_time"]).and_then(instant),
                 ..NewWindow::default()
             });
