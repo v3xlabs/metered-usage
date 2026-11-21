@@ -1,13 +1,23 @@
+import type { JSX } from "@solidjs/web";
+import { TbOutlineArrowDown, TbOutlineArrowUp } from "solid-icons/tb";
 import { createMemo, For, Show } from "solid-js";
 
 import type { UsageEvent } from "../api/usage";
 import { accountsNeedingSource } from "../domain/account";
-import { formatCost, formatExact, formatLatency, formatMoment, formatRecentMoment } from "../domain/format";
+import { formatCompact, formatCost, formatExact, formatLatency, formatMoment, formatRecentMoment } from "../domain/format";
 import { redact } from "../domain/privacy";
 import { AccountName } from "./AccountName";
 
 const HEADER_CELL = "px-3 py-2 font-medium";
 const CELL = "px-3 py-1.5 align-top";
+
+const TokenCount = (properties: { class: string; label: string; value: number; children?: JSX.Element; }) => (
+  <span class={["inline-flex items-center gap-0.5 align-top", properties.class]} title={`${properties.label}: ${formatExact(properties.value)}`}>
+    {properties.children}
+    <span aria-hidden="true">{formatCompact(properties.value)}</span>
+    <span class="sr-only">{`${properties.label}: ${formatExact(properties.value)} `}</span>
+  </span>
+);
 
 const QualityTag = (properties: { event: UsageEvent; }) => (
   <Show when={properties.event.token_quality !== "complete" && properties.event.token_quality}>
@@ -16,11 +26,21 @@ const QualityTag = (properties: { event: UsageEvent; }) => (
         title={`Token quality ${quality()}: ${formatExact(properties.event.unclassified_tokens)} unclassified tokens`}
         class="ml-1.5 rounded-control bg-amber-100 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
       >
-        {`${quality()} ${formatExact(properties.event.unclassified_tokens)}`}
+        {`${quality()} ${formatCompact(properties.event.unclassified_tokens)}`}
       </span>
     )}
   </Show>
 );
+
+const otherNames = (record: UsageEvent): string | undefined => {
+  const alias = record.model_alias === undefined || [record.model, record.raw_model].includes(record.model_alias) ? undefined : record.model_alias;
+  const names = [
+    record.raw_model === undefined ? undefined : `Recorded as ${record.raw_model}`,
+    alias === undefined ? undefined : `Requested as ${alias}`,
+  ].filter(name => name !== undefined);
+
+  return names.length === 0 ? undefined : names.join("\n");
+};
 
 // The database prices a new event within a minute, so a young unpriced row is still waiting
 // for its price rather than lacking one.
@@ -62,8 +82,8 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                       {formatRecentMoment(record.occurred_at, properties.nowMs)}
                     </time>
                   </td>
-                  <td class={CELL}>
-                    <span class="font-medium text-slate-900 dark:text-slate-100">{record.model}</span>
+                  <td class={[CELL, "max-w-64"]}>
+                    <span class="font-medium text-slate-900 dark:text-slate-100" title={otherNames(record)}>{record.model}</span>
                     <Show when={record.reasoning_effort}>
                       {effort => (
                         <span
@@ -74,30 +94,19 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                         </span>
                       )}
                     </Show>
-                    <Show when={record.raw_model}>
-                      {raw => (
-                        <span class="ml-1.5 text-slate-500 dark:text-slate-500" title="Model name the gateway recorded">
-                          {raw()}
-                        </span>
-                      )}
-                    </Show>
-                    <Show when={record.model_alias !== record.model && record.model_alias !== record.raw_model && record.model_alias}>
-                      {alias => (
-                        <span class="ml-1.5 text-slate-500 dark:text-slate-500" title="Alias the client requested">
-                          {alias()}
-                        </span>
-                      )}
-                    </Show>
                   </td>
                   <td class={[CELL, "max-w-72"]}>
                     <AccountName account={record.account} isSourceShown={needingSource().has(record.account.account_id)} />
                   </td>
                   <td class={[CELL, "text-slate-600 dark:text-slate-300"]} title={record.user_agent === undefined ? undefined : redact(record.user_agent)}>{record.harness ?? "-"}</td>
                   <td class={[CELL, "text-right whitespace-nowrap tabular-nums"]}>
-                    <span class="text-slate-900 dark:text-slate-100">{formatExact(record.total_tokens)}</span>
-                    <span class="ml-1.5 text-slate-500 dark:text-slate-500">
-                      {`${formatExact(record.input_tokens)} in / ${formatExact(record.output_tokens)} out`}
-                    </span>
+                    <TokenCount class="text-slate-900 dark:text-slate-100" label="Total tokens" value={record.total_tokens} />
+                    <TokenCount class="ml-2 text-slate-500 dark:text-slate-500" label="Input tokens" value={record.input_tokens}>
+                      <TbOutlineArrowDown size={11} aria-hidden="true" />
+                    </TokenCount>
+                    <TokenCount class="ml-1.5 text-slate-500 dark:text-slate-500" label="Output tokens" value={record.output_tokens}>
+                      <TbOutlineArrowUp size={11} aria-hidden="true" />
+                    </TokenCount>
                     <QualityTag event={record} />
                   </td>
                   <td
