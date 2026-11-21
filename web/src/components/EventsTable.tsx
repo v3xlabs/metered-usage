@@ -42,13 +42,6 @@ const otherNames = (record: UsageEvent): string | undefined => {
   return names.length === 0 ? undefined : names.join("\n");
 };
 
-// The database prices a new event within a minute, so a young unpriced row is still waiting
-// for its price rather than lacking one.
-const PRICING_GRACE_MS = 90_000;
-
-const costText = (cost: number | undefined, record: UsageEvent, nowMs: number): string =>
-  (cost === undefined && nowMs - Date.parse(record.occurred_at) < PRICING_GRACE_MS ? "pricing" : formatCost(cost));
-
 export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: number; }) => {
   const needingSource = createMemo(() => accountsNeedingSource(properties.events.map(event => event.account)));
 
@@ -116,7 +109,7 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                       record.list_cost_usd === undefined ? "text-slate-500 italic dark:text-slate-500" : "text-slate-900 dark:text-slate-100",
                     ]}
                   >
-                    {costText(record.list_cost_usd, record, properties.nowMs)}
+                    {formatCost(record.list_cost_usd)}
                   </td>
                   <td
                     class={[
@@ -125,7 +118,7 @@ export const EventsTable = (properties: { events: readonly UsageEvent[]; nowMs: 
                       record.billed_cost_usd === undefined ? "text-slate-500 italic dark:text-slate-500" : "text-slate-600 dark:text-slate-300",
                     ]}
                   >
-                    {costText(record.billed_cost_usd, record, properties.nowMs)}
+                    {formatCost(record.billed_cost_usd)}
                   </td>
                   <td class={[CELL, "text-right whitespace-nowrap text-slate-600 tabular-nums dark:text-slate-300"]}>
                     {formatLatency(record.latency_ms)}

@@ -1143,3 +1143,58 @@ async fn effort_suffix_events() -> Result<(), Failure> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn an_event_stored_for_a_priced_model_has_its_cost_before_any_fill() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.sync().await?;
+    let mut unlisted = request("unlisted", Timestamp::now(), 1000, 1000);
+    "unlisted-model".clone_into(&mut unlisted.model);
+    harness
+        .store(
+            "proxy",
+            vec![request("listed", Timestamp::now(), 1000, 1000), unlisted],
+        )
+        .await?;
+
+    let listed = harness.cost("listed").await?;
+    close(listed.list_cost_usd, 0.018);
+    close(listed.billed_cost_usd, 0.0);
+    assert_eq!(harness.cost("unlisted").await?.list_cost_usd, None);
+
+    harness
+        .manual(&json!({
+            "model": "unlisted-model",
+            "effective_from": "2025-01-01T00:00:00Z",
+            "input_usd_per_mtok": 1.0,
+            "cached_input_usd_per_mtok": 0.1,
+            "cache_write_usd_per_mtok": 1.25,
+            "output_usd_per_mtok": 5.0,
+        }))
+        .await?;
+    harness.fill().await?;
+    close(harness.cost("unlisted").await?.list_cost_usd, 0.006);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_batch_whose_pricing_fails_is_still_stored_and_left_to_the_fill() -> Result<(), Failure> {
+    let harness = harness().await?;
+    harness.sync().await?;
+    sqlx::query("ALTER TABLE model_price RENAME TO model_price_away")
+        .execute(&harness.state.database.pool)
+        .await?;
+    harness
+        .store("proxy", vec![request("kept", Timestamp::now(), 1000, 1000)])
+        .await?;
+    assert_eq!(harness.cost("kept").await?.list_cost_usd, None);
+
+    sqlx::query("ALTER TABLE model_price_away RENAME TO model_price")
+        .execute(&harness.state.database.pool)
+        .await?;
+    harness.fill().await?;
+    close(harness.cost("kept").await?.list_cost_usd, 0.018);
+
+    Ok(())
+}

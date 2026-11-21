@@ -11,6 +11,7 @@ use crate::change::{Change, Subject};
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
 use crate::id::Id;
+use crate::price::ModelPrice;
 use crate::quota;
 use crate::source::Source;
 use crate::usage::dead_letter::DeadLetter;
@@ -160,6 +161,7 @@ pub async fn ingest(
             report.duplicates += 1;
         }
     }
+    ModelPrice::price_stored(&mut transaction, state, &stored).await?;
     // After the account changes, so a new account's `account.changed` comes before the
     // first arrival that names it.
     snapshot.record_changes(&mut transaction).await?;

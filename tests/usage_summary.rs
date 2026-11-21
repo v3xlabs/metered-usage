@@ -846,8 +846,8 @@ async fn the_etag_holds_until_the_window_reads_differently() -> Result<(), Failu
     assert_ne!(grown_tag, current);
     let summary = grown.json().await.value().deserialize::<Summary>();
     assert_eq!(summary.total.requests, 7);
-    // `inside` is not priced until a fill runs.
-    assert_eq!(summary.total.unpriced_requests, 3);
+    // `inside` was priced as it was stored, so only d and f lack a price.
+    assert_eq!(summary.total.unpriced_requests, 2);
 
     // So does a price that turns an unknown cost into a known one: d and f at 1.25 in and
     // 10 out, with d's oauth account billed nothing and f keeping its reported charge.

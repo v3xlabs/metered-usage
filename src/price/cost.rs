@@ -2,16 +2,17 @@
 
 use jiff::Timestamp;
 use serde_json::Value;
-use sqlx::SqliteConnection;
+use sqlx::{Connection, SqliteConnection};
 
 use crate::app::AppState;
 use crate::change::{Change, Subject};
 use crate::config::PricingConfig;
 use crate::database::DatabaseError;
 use crate::database::codec::StoredTimestamp;
+use crate::id::Id;
 use crate::price::ModelPrice;
 use crate::price::effort::ModelCache;
-use crate::usage::{PricedEvent, UsageUpdate};
+use crate::usage::{PricedEvent, UsageEvent, UsageUpdate};
 
 /// Picks one price per unpriced event and freezes its cost onto the event. Events no
 /// price matches are left untouched, so they are not rewritten on every pass.
@@ -23,7 +24,10 @@ use crate::usage::{PricedEvent, UsageUpdate};
 /// config's `priced_as` as a JSON object, which names the key for a model the map knows
 /// only under another name (`kimi-k3-256k` as `moonshot/kimi-k3`). A bare key still wins,
 /// because the exact name ranks first.
-const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model \
+macro_rules! fill_statement {
+    ($filter:literal) => {
+        concat!(
+            "WITH priced_as AS (SELECT key AS model, value AS price_model \
          FROM json_each(?1)), \
      resolved_as AS (SELECT json_extract(value, '$.provider') AS provider, \
          json_extract(value, '$.model') AS model, \
@@ -54,7 +58,9 @@ const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model
          AND (price.service_tier IS NULL OR price.service_tier = event.service_tier) \
          AND price.min_input_tokens <= event.input_tokens \
          AND price.effective_from <= event.occurred_at \
-     WHERE event.list_cost_usd IS NULL), \
+         WHERE ",
+            $filter,
+            "), \
      ranked AS ( \
      SELECT event_id, price_id, from_resolved, ROW_NUMBER() OVER ( \
          PARTITION BY event_id \
@@ -87,7 +93,17 @@ const FILL: &str = "WITH priced_as AS (SELECT key AS model, value AS price_model
      AND price.price_id = chosen.price_id \
      AND account.account_id = usage_event.account_id \
      RETURNING usage_event.event_id, usage_event.price_id, usage_event.list_cost_usd, \
-     usage_event.billed_cost_usd";
+     usage_event.billed_cost_usd"
+        )
+    };
+}
+
+const FILL_ALL: &str = fill_statement!("event.list_cost_usd IS NULL");
+
+/// `?3` is the JSON array of ids; a plain `IN` makes SQLite look each up by primary key.
+const FILL_BATCH: &str = fill_statement!(
+    "event.event_id IN (SELECT value FROM json_each(?3)) AND event.list_cost_usd IS NULL"
+);
 
 impl ModelPrice {
     /// Answers how many events were priced, and tells the live stream what each costs
@@ -98,6 +114,7 @@ impl ModelPrice {
             &mut transaction,
             &state.config.pricing,
             &state.database.models,
+            None,
         )
         .await?;
         if !priced.is_empty() {
@@ -108,6 +125,34 @@ impl ModelPrice {
         publish(state, priced);
 
         Ok(count)
+    }
+
+    /// Prices the events a batch just stored, inside its transaction; only a pricing failure is logged.
+    pub(crate) async fn price_stored(
+        connection: &mut SqliteConnection,
+        state: &AppState,
+        stored: &[Id<UsageEvent>],
+    ) -> Result<(), DatabaseError> {
+        if stored.is_empty() {
+            return Ok(());
+        }
+        let mut savepoint = connection.begin().await?;
+        match fill(
+            &mut savepoint,
+            &state.config.pricing,
+            &state.database.models,
+            Some(stored),
+        )
+        .await
+        {
+            Ok(_) => savepoint.commit().await?,
+            Err(error) => {
+                tracing::warn!(%error, "pricing a stored batch failed, the fill prices it later");
+                savepoint.rollback().await?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Forgets the cost of every event in the range and prices it again. A billed cost is
@@ -134,6 +179,7 @@ impl ModelPrice {
             &mut transaction,
             &state.config.pricing,
             &state.database.models,
+            None,
         )
         .await?;
         if cleared > 0 || !priced.is_empty() {
@@ -146,27 +192,46 @@ impl ModelPrice {
     }
 }
 
+/// Prices every unpriced event, or only `only` when given.
 async fn fill(
     connection: &mut SqliteConnection,
     pricing: &PricingConfig,
     models: &ModelCache,
+    only: Option<&[Id<UsageEvent>]>,
 ) -> Result<Vec<PricedEvent>, DatabaseError> {
     let priced_as = pricing
         .priced_as
         .iter()
         .map(|(model, key)| (model, key.as_str()))
         .collect::<Value>();
-    let unpriced: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT provider, model FROM usage_event WHERE list_cost_usd IS NULL",
-    )
-    .fetch_all(&mut *connection)
-    .await?;
+    let ids = only.map(|ids| ids.iter().map(|id| id.raw()).collect::<Value>().to_string());
+    let unpriced: Vec<(String, String)> = match &ids {
+        Some(ids) => {
+            sqlx::query_as(
+                "SELECT DISTINCT provider, model FROM usage_event \
+                 WHERE event_id IN (SELECT value FROM json_each(?1)) AND list_cost_usd IS NULL",
+            )
+            .bind(ids)
+            .fetch_all(&mut *connection)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT DISTINCT provider, model FROM usage_event WHERE list_cost_usd IS NULL",
+            )
+            .fetch_all(&mut *connection)
+            .await?
+        }
+    };
     let resolved_as = models.resolved_as_json(&unpriced);
-    Ok(sqlx::query_as::<_, PricedEvent>(FILL)
-        .bind(priced_as.to_string())
-        .bind(resolved_as)
-        .fetch_all(connection)
-        .await?)
+    let statement =
+        sqlx::query_as::<_, PricedEvent>(if ids.is_some() { FILL_BATCH } else { FILL_ALL })
+            .bind(priced_as.to_string())
+            .bind(resolved_as);
+    Ok(match ids {
+        Some(ids) => statement.bind(ids).fetch_all(connection).await?,
+        None => statement.fetch_all(connection).await?,
+    })
 }
 
 /// Only after the commit, so a client never sees a cost the database does not hold.

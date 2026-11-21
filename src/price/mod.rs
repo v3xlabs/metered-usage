@@ -229,8 +229,7 @@ impl<'q> Encode<'q, Sqlite> for Origin {
     }
 }
 
-/// Syncs the catalog now and every `pricing.refresh_hours`, and prices new events every
-/// minute.
+/// Syncs the catalog now and every `pricing.refresh_hours`, and fills missing costs every minute.
 pub fn spawn(state: Arc<AppState>) {
     // A zero refresh would make the interval panic; an hour is the shortest that is sane
     // for a file that changes a few times a week.
