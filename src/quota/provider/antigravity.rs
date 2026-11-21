@@ -93,9 +93,20 @@ pub async fn fetch(
             match outcome {
                 Ok(payload) => {
                     answered = true;
-                    found.extend(windows(&unwrap_body(payload)));
+                    let here = windows(&unwrap_body(payload));
+                    let keys = here
+                        .iter()
+                        .map(|window| window.key.as_str())
+                        .collect::<Vec<_>>();
+                    if keys.is_empty() {
+                        tracing::warn!(host = host(url), "the quota summary held no window");
+                    } else {
+                        tracing::info!(host = host(url), ?keys, "the quota summary was read");
+                    }
+                    found.extend(here);
                 }
                 Err(error) => {
+                    tracing::warn!(host = host(url), %error, "the quota summary was not read");
                     // 403 and 404 say most about the credential, so they outrank a later
                     // host's failure.
                     let decisive = matches!(failure, Some(RefreshError::Upstream(403 | 404)));
@@ -118,6 +129,11 @@ pub async fn fetch(
         plan,
         ..Observation::default()
     })
+}
+
+/// The host of a Google API URL, which names no credential.
+fn host(url: &str) -> &str {
+    url.split('/').nth(2).unwrap_or(url)
 }
 
 /// Some answers wrap the payload in a `body` object.
